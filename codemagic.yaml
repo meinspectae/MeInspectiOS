@@ -21,15 +21,27 @@ workflows:
           npx cap sync ios
       - name: Install CocoaPods
         script: |
-          cd ios/App && pod install
+          POD_DIR=$(find . -maxdepth 4 -name "Podfile" -exec dirname {} \; | head -n 1)
+          if [ -z "$POD_DIR" ]; then
+            echo "ERROR: Podfile not found anywhere in repo! Listing directory contents:"
+            ls -la
+            ls -la ios || true
+            exit 1
+          fi
+          echo "Found Podfile in: $POD_DIR"
+          cd "$POD_DIR"
+          pod install
       - name: Set up signing
         script: xcode-project use-profiles
       - name: Build IPA
         script: |
-          cd ios/App
-          xcode-project build-ipa --workspace "App.xcworkspace" --scheme "App"
+          WORKSPACE_PATH=$(find . -maxdepth 4 -name "*.xcworkspace" | head -n 1)
+          WORKSPACE_DIR=$(dirname "$WORKSPACE_PATH")
+          cd "$WORKSPACE_DIR"
+          xcode-project build-ipa --workspace "$(basename "$WORKSPACE_PATH")" --scheme "App"
     artifacts:
       - ios/App/build/ios/ipa/*.ipa
+      - "**/build/ios/ipa/*.ipa"
     publishing:
       app_store_connect:
         auth: integration
