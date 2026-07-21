@@ -4,7 +4,16 @@
     "slug": "meinspect-ae",
     "version": "1.0.0",
     "ios": {
-      "bundleIdentifier": "com.yourcompany.appname"
+      "bundleIdentifier": "com.meinspect.meinspect",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [],
+    "extra": {
+      "eas": {
+        "projectId": "94e85685-0aea-4da0-b169-f98e243cbe25"
+      }
     }
   }
 }

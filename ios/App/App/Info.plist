@@ -47,13 +47,5 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>NSCameraUsageDescription</key>
-	<string>MeInspect needs camera access to take property photos.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>MeInspect needs photo library access to save and select property photos.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>MeInspect needs photo library access to save property photos.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>MeInspect needs location access to geotag property photos for tamper-proof reporting.</string>
 </dict>
 </plist>
