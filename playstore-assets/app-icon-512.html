@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 512px;
+    height: 512px;
+    overflow: hidden;
+    background: #2563eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-container {
+    width: 512px;
+    height: 512px;
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .icon-container::before {
+    content: '';
+    position: absolute;
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    top: 50px;
+    right: -30px;
+  }
+  svg {
+    width: 280px;
+    height: 280px;
+    position: relative;
+    z-index: 2;
+  }
+</style>
+</head>
+<body>
+<div class="icon-container">
+  <svg viewBox="0 0 280 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- House outline -->
+    <path d="M140 30L30 115V250H100V185H180V250H250V115L140 30Z" 
+          stroke="white" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <!-- Eye -->
+    <ellipse cx="140" cy="140" rx="45" ry="35" stroke="white" stroke-width="6" fill="none"/>
+    <circle cx="140" cy="140" r="15" fill="white"/>
+    <circle cx="140" cy="140" r="6" fill="#2563eb"/>
+    <!-- Checkmark badge -->
+    <circle cx="210" cy="210" r="32" fill="#22c55e"/>
+    <path d="M195 210L205 220L228 197" stroke="white" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</div>
+</body>
+</html>

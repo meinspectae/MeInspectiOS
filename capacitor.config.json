@@ -1,0 +1,42 @@
+{
+  "appId": "com.meinspect.app",
+  "appName": "MeInspect",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": [
+      "*.youbase.cloud",
+      "*.cloudflare.com",
+      "*.stripe.com",
+      "*.meinspect.com"
+    ]
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#2563eb",
+      "androidSplashResourceName": "splash",
+      "showSpinner": true,
+      "spinnerColor": "#ffffff",
+      "launchAutoHide": true
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#2563eb"
+    },
+    "Camera": {
+      "permissions": ["camera", "photos"]
+    },
+    "Geolocation": {
+      "permissions": ["location"]
+    }
+  },
+  "android": {
+    "icon": "public/meinspect-logo.png",
+    "adaptiveIconForeground": "public/meinspect-logo.png",
+    "adaptiveIconBackground": "#2563eb",
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  }
+}

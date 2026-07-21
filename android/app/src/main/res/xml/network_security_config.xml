@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow HTTPS traffic to the Youbase backend and all subdomains -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">youbase.cloud</domain>
+        <domain includeSubdomains="true">cloudflare.com</domain>
+    </domain-config>
+    <!-- Base config: block all cleartext HTTP (enforce HTTPS everywhere) -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" overridePins="true" />
+        </trust-anchors>
+    </base-config>
+    <!-- Debug override for development builds (overridden by release config) -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

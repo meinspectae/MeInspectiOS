@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1024px;
+    height: 500px;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  .banner {
+    width: 1024px;
+    height: 500px;
+    background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 40%, #3b82f6 70%, #60a5fa 100%);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 80px;
+    position: relative;
+    overflow: hidden;
+  }
+  /* Decorative circles */
+  .banner::before {
+    content: '';
+    position: absolute;
+    width: 400px;
+    height: 400px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.05);
+    top: -100px;
+    right: -50px;
+  }
+  .banner::after {
+    content: '';
+    position: absolute;
+    width: 250px;
+    height: 250px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.04);
+    bottom: -80px;
+    left: 300px;
+  }
+  .left {
+    position: relative;
+    z-index: 2;
+  }
+  .logo-icon {
+    width: 80px;
+    height: 80px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 24px;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+  .logo-icon svg {
+    width: 48px;
+    height: 48px;
+  }
+  .app-name {
+    font-size: 56px;
+    font-weight: 800;
+    color: white;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    margin-bottom: 12px;
+  }
+  .app-name span {
+    color: #86efac;
+  }
+  .tagline {
+    font-size: 22px;
+    color: rgba(255,255,255,0.85);
+    font-weight: 400;
+    line-height: 1.4;
+  }
+  .right {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    gap: 16px;
+    align-items: flex-end;
+  }
+  .phone-mockup {
+    width: 200px;
+    height: 380px;
+    background: #1a1a2e;
+    border-radius: 24px;
+    padding: 8px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    border: 2px solid rgba(255,255,255,0.1);
+  }
+  .phone-screen {
+    width: 100%;
+    height: 100%;
+    background: white;
+    border-radius: 18px;
+    overflow: hidden;
+    padding: 16px 12px;
+  }
+  .phone-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .phone-logo-sm {
+    width: 24px;
+    height: 24px;
+    background: #2563eb;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .phone-logo-sm svg { width: 14px; height: 14px; }
+  .phone-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #1e293b;
+  }
+  .phone-subtitle {
+    font-size: 7px;
+    color: #94a3b8;
+  }
+  .phone-card {
+    background: linear-gradient(135deg, #2563eb, #7c3aed);
+    border-radius: 10px;
+    padding: 10px;
+    margin-bottom: 10px;
+    color: white;
+  }
+  .phone-card-title {
+    font-size: 9px;
+    font-weight: 700;
+  }
+  .phone-card-sub {
+    font-size: 7px;
+    opacity: 0.8;
+    margin-top: 2px;
+  }
+  .phone-section-title {
+    font-size: 8px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 6px;
+  }
+  .phone-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .phone-item-name {
+    font-size: 8px;
+    color: #334155;
+    font-weight: 500;
+  }
+  .phone-badge {
+    font-size: 6px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  .badge-good { background: #dcfce7; color: #16a34a; }
+  .badge-fair { background: #fef3c7; color: #d97706; }
+  .badge-poor { background: #fee2e2; color: #dc2626; }
+  .phone-badge-check {
+    width: 16px;
+    height: 16px;
+    background: #22c55e;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 6px;
+  }
+  .phone-badge-check svg { width: 10px; height: 10px; }
+
+  .phone-mockup-2 {
+    width: 170px;
+    height: 320px;
+    background: #1a1a2e;
+    border-radius: 20px;
+    padding: 6px;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.25);
+    border: 2px solid rgba(255,255,255,0.08);
+    transform: rotate(3deg);
+  }
+  .phone-screen-2 {
+    width: 100%;
+    height: 100%;
+    background: white;
+    border-radius: 15px;
+    overflow: hidden;
+    padding: 14px 10px;
+  }
+  .room-tag {
+    display: inline-block;
+    font-size: 7px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    margin: 2px;
+    font-weight: 500;
+  }
+  .room-entrance { background: #dbeafe; color: #2563eb; }
+  .room-living { background: #dbeafe; color: #2563eb; }
+  .room-kitchen { background: #dbeafe; color: #2563eb; }
+  .room-bedroom { background: #dcfce7; color: #16a34a; }
+  .room-bathroom { background: #fef3c7; color: #d97706; }
+
+  .step-indicator {
+    display: flex;
+    gap: 4px;
+    margin-top: 12px;
+    margin-bottom: 12px;
+  }
+  .step-dot {
+    height: 3px;
+    border-radius: 2px;
+    flex: 1;
+  }
+  .step-active { background: #2563eb; }
+  .step-inactive { background: #e2e8f0; }
+</style>
+</head>
+<body>
+<div class="banner">
+  <div class="left">
+    <div class="logo-icon">
+      <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M24 6L6 20V42H18V30H30V42H42V20L24 6Z" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        <circle cx="24" cy="22" r="6" stroke="white" stroke-width="2" fill="none"/>
+        <circle cx="24" cy="22" r="2" fill="white"/>
+        <circle cx="35" cy="35" r="7" fill="#22c55e"/>
+        <path d="M32 35L34 37L38 33" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="app-name">Me<span>Inspect</span></div>
+    <div class="tagline">Professional Property Condition Reports<br>for Dubai Real Estate</div>
+  </div>
+  <div class="right">
+    <div class="phone-mockup-2">
+      <div class="phone-screen-2">
+        <div class="phone-header">
+          <div class="phone-logo-sm">
+            <svg viewBox="0 0 24 24" fill="white"><path d="M12 4L4 10V20H9V15H15V20H20V10L12 4Z"/></svg>
+          </div>
+          <div>
+            <div class="phone-title">MeInspect</div>
+            <div class="phone-subtitle">New Inspection</div>
+          </div>
+        </div>
+        <div class="phone-section-title">Property Type</div>
+        <div style="display:flex;gap:4px;margin-bottom:10px;">
+          <div style="flex:1;text-align:center;padding:6px 2px;border:1.5px solid #2563eb;border-radius:6px;font-size:7px;color:#2563eb;font-weight:600;background:#eff6ff;">Apartment</div>
+          <div style="flex:1;text-align:center;padding:6px 2px;border:1px solid #e2e8f0;border-radius:6px;font-size:7px;color:#64748b;">Townhouse</div>
+          <div style="flex:1;text-align:center;padding:6px 2px;border:1px solid #e2e8f0;border-radius:6px;font-size:7px;color:#64748b;">Villa</div>
+        </div>
+        <div class="phone-section-title">Rooms</div>
+        <div>
+          <span class="room-tag room-entrance">🏠 Entrance</span>
+          <span class="room-tag room-living">🛋️ Living</span>
+          <span class="room-tag room-kitchen">🍳 Kitchen</span>
+          <span class="room-tag room-bedroom">🛏️ Bedroom</span>
+          <span class="room-tag room-bathroom">🚿 Bathroom</span>
+        </div>
+      </div>
+    </div>
+    <div class="phone-mockup">
+      <div class="phone-screen">
+        <div class="phone-header">
+          <div class="phone-logo-sm">
+            <svg viewBox="0 0 24 24" fill="white"><path d="M12 4L4 10V20H9V15H15V20H20V10L12 4Z"/></svg>
+          </div>
+          <div>
+            <div class="phone-title">MeInspect</div>
+            <div class="phone-subtitle">Inspection Report</div>
+          </div>
+        </div>
+        <div class="phone-card">
+          <div class="phone-card-title">📍 Marina Heights Tower</div>
+          <div class="phone-card-sub">Unit 1204 · Studio City, Dubai</div>
+        </div>
+        <div class="phone-section-title">Room Assessment</div>
+        <div class="phone-item">
+          <span class="phone-item-name">🛋️ Living Room</span>
+          <div style="display:flex;align-items:center;">
+            <span class="phone-badge badge-good">Good</span>
+            <div class="phone-badge-check">
+              <svg viewBox="0 0 24 24" fill="white"><path d="M5 13l4 4L19 7"/></svg>
+            </div>
+          </div>
+        </div>
+        <div class="phone-item">
+          <span class="phone-item-name">🍳 Kitchen</span>
+          <div style="display:flex;align-items:center;">
+            <span class="phone-badge badge-good">Very Good</span>
+            <div class="phone-badge-check">
+              <svg viewBox="0 0 24 24" fill="white"><path d="M5 13l4 4L19 7"/></svg>
+            </div>
+          </div>
+        </div>
+        <div class="phone-item">
+          <span class="phone-item-name">🛏️ Master Bedroom</span>
+          <div style="display:flex;align-items:center;">
+            <span class="phone-badge badge-fair">Fair</span>
+            <div class="phone-badge-check">
+              <svg viewBox="0 0 24 24" fill="white"><path d="M5 13l4 4L19 7"/></svg>
+            </div>
+          </div>
+        </div>
+        <div class="phone-item">
+          <span class="phone-item-name">🚿 Bathroom</span>
+          <div style="display:flex;align-items:center;">
+            <span class="phone-badge badge-poor">Poor</span>
+            <div class="phone-badge-check">
+              <svg viewBox="0 0 24 24" fill="white"><path d="M5 13l4 4L19 7"/></svg>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          <div class="step-indicator">
+            <div class="step-dot step-active"></div>
+            <div class="step-dot step-active"></div>
+            <div class="step-dot step-active"></div>
+            <div class="step-dot step-active"></div>
+            <div class="step-dot step-inactive"></div>
+            <div class="step-dot step-inactive"></div>
+          </div>
+          <div style="text-align:center;font-size:7px;color:#94a3b8;">Step 4 of 6 · Signatures</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

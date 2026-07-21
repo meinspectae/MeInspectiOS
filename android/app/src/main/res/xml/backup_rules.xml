@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Auto-backup rules for Android 11 and below (API <= 31).
+    Exclude sensitive data from Google Drive backups.
+-->
+<full-backup-content>
+    <!-- Exclude shared preferences that hold auth tokens -->
+    <exclude domain="sharedpref" path="." />
+    <!-- Exclude databases to avoid restoring stale/expired auth state -->
+    <exclude domain="database" path="." />
+    <!-- Exclude cache -->
+    <exclude domain="cache" path="." />
+    <!-- Exclude external storage -->
+    <exclude domain="external" path="." />
+</full-backup-content>
