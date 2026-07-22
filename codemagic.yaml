@@ -14,6 +14,7 @@ workflows:
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
+        BUNDLE_ID: "com.meinspect.app"
     scripts:
       - name: Generate iOS project & CocoaPods dependencies
         script: | 
@@ -36,7 +37,7 @@ workflows:
           pod install
       - name: Set up code signing settings on Xcode project
         script: | 
-          xcode-project use-profiles
+          xcode-project use-profiles --export-type=app-store
       - name: Increment build number
         script: | 
           cd ios/App
