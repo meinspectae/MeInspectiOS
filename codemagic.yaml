@@ -8,6 +8,9 @@ workflows:
     environment:
       groups:
         - app_store_credentials
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.meinspect.app
       node: 22
       xcode: latest
       cocoapods: default
@@ -21,35 +24,53 @@ workflows:
           npm install
           chmod -R +x node_modules/.bin
           
-          # Force Capacitor to generate the native iOS structure on macOS
+          # Force Capacitor to generate/sync native iOS files
           npx cap add ios || true
           npx cap sync ios
           
-          # Navigate into the generated iOS app folder
+          # Force the generated Xcode project file to match com.meinspect.app
+          sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = .*/PRODUCT_BUNDLE_IDENTIFIER = com.meinspect.app;/g' ios/App/App.xcodeproj/project.pbxproj
+          
+          # Navigate into iOS directory
           cd ios/App
           
-          # Ensure Podfile exists on macOS runner; initialize if missing, then install
+          # Initialize Podfile if missing and install dependencies
           if [ ! -f "Podfile" ]; then
-            echo "Podfile missing from Windows repo, initializing fresh Podfile on macOS runner..."
             pod init
           fi
           
           pod install
+
+      - name: Set up keychain and fetch code signing certificates
+        script: |
+          keychain initialize
+          
+          # Automatically create/fetch App Store profile and Certificate from Apple Portal
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+            
+          keychain add-certificates
+
       - name: Set up code signing settings on Xcode project
         script: | 
           xcode-project use-profiles
+
       - name: Increment build number
         script: | 
           cd ios/App
           agvtool new-version -all $BUILD_NUMBER
+
       - name: Build IPA
         script: | 
           xcode-project build-ipa \
             --workspace "$XCODE_WORKSPACE" \
             --scheme "$XCODE_SCHEME"
+
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+
     publishing:
       app_store_connect:
         auth: integration
