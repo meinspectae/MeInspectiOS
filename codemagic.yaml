@@ -3,8 +3,8 @@ workflows:
     name: iOS Release
     max_build_duration: 120
     instance_type: mac_mini_m1
-   integrations:
-      app_store_connect: app_store_connect
+    integrations:
+      app_store_connect: "MeInspect Key"
     environment:
       groups:
         - app_store_credentials
@@ -14,7 +14,6 @@ workflows:
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
-        APP_ID: 6739343000                  # Replace with your actual App Store Connect App ID if different
     scripts:
       - name: Install dependencies & sync Capacitor
         script: | 
@@ -42,5 +41,3 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
-        beta_groups:
-          - "Build 18"
