@@ -19,10 +19,11 @@ workflows:
         script: | 
           npm install
           chmod -R +x node_modules/.bin
+          npx cap add ios || true
           npx cap sync ios
       - name: CocoaPods installation
         script: | 
-          cd ios/App
+          cd ios/App || cd ios
           pod install
       - name: Set up code signing settings on Xcode project
         script: | 
