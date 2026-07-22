@@ -27,7 +27,13 @@ workflows:
           # Force Capacitor to generate/sync native iOS files
           npx cap add ios || true
           npx cap sync ios
-          
+# Inject required iOS location permission string into Info.plist
+plutil -insert NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
+plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
+
+plutil -insert NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
+plutil -replace NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
+
           # Force the generated Xcode project file to match com.meinspect.app
           sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = .*/PRODUCT_BUNDLE_IDENTIFIER = com.meinspect.app;/g' ios/App/App.xcodeproj/project.pbxproj
           
