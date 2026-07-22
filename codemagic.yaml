@@ -37,7 +37,7 @@ workflows:
           pod install
       - name: Set up code signing settings on Xcode project
         script: | 
-          xcode-project use-profiles --export-type=app-store
+          xcode-project use-profiles
       - name: Increment build number
         script: | 
           cd ios/App
