@@ -15,15 +15,24 @@ workflows:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
     scripts:
-      - name: Install dependencies & sync Capacitor
+      - name: Generate iOS project & CocoaPods dependencies
         script: | 
           npm install
           chmod -R +x node_modules/.bin
+          
+          # Force Capacitor to generate the native iOS structure on macOS
           npx cap add ios || true
           npx cap sync ios
-      - name: CocoaPods installation
-        script: | 
-          cd ios/App || cd ios
+          
+          # Navigate into the generated iOS app folder
+          cd ios/App
+          
+          # Ensure Podfile exists on macOS runner; initialize if missing, then install
+          if [ ! -f "Podfile" ]; then
+            echo "Podfile missing from Windows repo, initializing fresh Podfile on macOS runner..."
+            pod init
+          fi
+          
           pod install
       - name: Set up code signing settings on Xcode project
         script: | 
