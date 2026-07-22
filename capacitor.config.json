@@ -25,14 +25,10 @@
       "backgroundColor": "#2563eb"
     },
     "Camera": {
-      "permissions": ["camera", "photos"],
-      "NSPhotoLibraryUsageDescription": "MeInspect requires access to your photo library to attach inspection images to reports.",
-      "NSCameraUsageDescription": "MeInspect requires access to your camera to capture property photos during inspections."
+      "permissions": ["camera", "photos"]
     },
     "Geolocation": {
-      "permissions": ["location"],
-      "NSLocationWhenInUseUsageDescription": "MeInspect uses your location to verify property address locations during inspections.",
-      "NSLocationAlwaysAndWhenInUseUsageDescription": "MeInspect uses your location to verify property address locations during inspections."
+      "permissions": ["location"]
     }
   },
   "android": {
