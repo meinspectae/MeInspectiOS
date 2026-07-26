@@ -26,6 +26,20 @@
     max-width: 100%;
   }
 
+  /* Prevent iOS Safari from auto-zooming the page when a form field is
+     focused. iOS triggers this zoom whenever a focused input/textarea/select
+     has a computed font-size below 16px, and (notably) does not always
+     zoom back out afterwards, leaving the page stuck zoomed in. The
+     viewport meta tag already sets maximum-scale=1/user-scalable=no as the
+     primary fix; this is a defense-in-depth rule for any 14px form fields. */
+  @media (max-width: 768px) {
+    input,
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
+  }
+
   /* Custom scrollbar */
   ::-webkit-scrollbar {
     width: 6px;

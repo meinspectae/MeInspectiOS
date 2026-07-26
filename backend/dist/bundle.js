@@ -20524,11 +20524,13 @@ async function createApp(edgespark) {
   });
   async function sendNotificationEmail(edgespark2, to, subject, html) {
     const apiKey = edgespark2.secret.get("RESEND_API_KEY");
+    const fromEmail = edgespark2.secret.get("FROM_EMAIL") || "MeInspect <hello@meinspect.com>";
     if (!apiKey) {
-      console.warn("[NOTIFICATIONS] RESEND_API_KEY not configured");
-      return false;
+      console.error("[NOTIFICATIONS] RESEND_API_KEY not configured \u2014 email NOT sent to", to);
+      return { ok: false, error: "RESEND_API_KEY not configured" };
     }
     try {
+      console.log(`[NOTIFICATIONS] Sending "${subject}" to ${to} from ${fromEmail}`);
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
@@ -20536,18 +20538,78 @@ async function createApp(edgespark) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          from: edgespark2.secret.get("FROM_EMAIL") || "MeInspect <hello@meinspect.com>",
+          from: fromEmail,
           to: [to],
           subject,
           html
         })
       });
-      return res.ok;
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        console.log(`[NOTIFICATIONS] Resend accepted email to ${to} \u2014 id: ${data.id}`);
+        return { ok: true, id: data.id, status: res.status };
+      }
+      const errMsg = data.message || data.error || data.name || `HTTP ${res.status}`;
+      console.error(`[NOTIFICATIONS] Resend REJECTED email to ${to} (status ${res.status}):`, errMsg, data);
+      return { ok: false, error: errMsg, status: res.status };
     } catch (err) {
-      console.error("[NOTIFICATIONS] Failed to send email:", err);
-      return false;
+      console.error("[NOTIFICATIONS] Network error sending email to", to, ":", err);
+      return { ok: false, error: err instanceof Error ? err.message : "Network error" };
     }
   }
+  function buildWelcomeHtml(name) {
+    return `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
+        <div style="text-align: center; margin-bottom: 32px;">
+          <h1 style="font-size: 24px; color: #1e293b; margin: 0;">Welcome to MeInspect</h1>
+          <p style="color: #64748b; font-size: 14px; margin-top: 8px;">Professional Property Condition Reports</p>
+        </div>
+        <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+          <p style="color: #334155; font-size: 15px; line-height: 1.6; margin: 0;">
+            Hi ${name || "there"},<br/><br/>
+            Thank you for joining MeInspect! You can now create professional property condition reports with timestamped photos, detailed assessments, and digital signatures.
+          </p>
+        </div>
+        <div style="text-align: center;">
+          <a href="https://app.meinspect.com"
+             style="display: inline-block; background: #2563eb; color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">
+            Get Started
+          </a>
+        </div>
+        <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-top: 32px;">
+          MeInspect \u2014 Property Condition Reports for Landlords, Tenants & Inspectors
+        </p>
+      </div>
+    `;
+  }
+  app.post("/api/public/notifications/welcome", async (c) => {
+    const { email, name } = await c.req.json().catch(() => ({}));
+    if (!email) return c.json({ error: "email is required" }, 400);
+    let authUser = null;
+    try {
+      const rows = await edgespark.db.select().from(db_schema_exports.esSystemAuthUser).where(eq(db_schema_exports.esSystemAuthUser.email, String(email).toLowerCase().trim()));
+      authUser = rows[0] || null;
+    } catch (e) {
+      console.error("[NOTIFICATIONS] welcome lookup failed:", e);
+    }
+    if (!authUser) {
+      console.warn("[NOTIFICATIONS] welcome requested for unknown email:", email);
+      return c.json({ success: false, error: "not_registered" }, 200);
+    }
+    const createdAt = Number(authUser.createdAt || 0);
+    const ageMs = Date.now() - createdAt;
+    if (createdAt > 0 && ageMs > 30 * 60 * 1e3) {
+      console.warn("[NOTIFICATIONS] welcome skipped \u2014 account not fresh:", email, "ageMs:", ageMs);
+      return c.json({ success: false, error: "not_fresh" }, 200);
+    }
+    const result = await sendNotificationEmail(
+      edgespark,
+      authUser.email,
+      "Welcome to MeInspect!",
+      buildWelcomeHtml(name || authUser.name)
+    );
+    return c.json({ success: result.ok, error: result.error });
+  });
   app.post("/api/notifications/welcome", async (c) => {
     if (!edgespark.auth.user) return c.json({ error: "Unauthorized" }, 401);
     const { name, email } = await c.req.json();
@@ -20576,8 +20638,8 @@ async function createApp(edgespark) {
         </p>
       </div>
     `;
-    const sent = await sendNotificationEmail(edgespark, email, subject, html);
-    return c.json({ success: sent });
+    const result = await sendNotificationEmail(edgespark, email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
   });
   app.post("/api/notifications/report-complete", async (c) => {
     if (!edgespark.auth.user) return c.json({ error: "Unauthorized" }, 401);
@@ -20612,8 +20674,8 @@ async function createApp(edgespark) {
         </p>
       </div>
     `;
-    const sent = await sendNotificationEmail(edgespark, email, subject, html);
-    return c.json({ success: sent });
+    const result = await sendNotificationEmail(edgespark, email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
   });
   app.post("/api/notifications/payment-success", async (c) => {
     if (!edgespark.auth.user) return c.json({ error: "Unauthorized" }, 401);
@@ -20656,8 +20718,8 @@ async function createApp(edgespark) {
         </p>
       </div>
     `;
-    const sent = await sendNotificationEmail(edgespark, email, subject, html);
-    return c.json({ success: sent });
+    const result = await sendNotificationEmail(edgespark, email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
   });
   app.post("/api/notifications/password-changed", async (c) => {
     if (!edgespark.auth.user) return c.json({ error: "Unauthorized" }, 401);
@@ -20685,8 +20747,8 @@ async function createApp(edgespark) {
         </p>
       </div>
     `;
-    const sent = await sendNotificationEmail(edgespark, email, subject, html);
-    return c.json({ success: sent });
+    const result = await sendNotificationEmail(edgespark, email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
   });
   return app;
 }

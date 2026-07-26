@@ -108,13 +108,35 @@ export async function capturePhoto(): Promise<Photo | null> {
   // On native platforms (Android/iOS), use the Capacitor Camera + Geolocation plugins
   if (Capacitor.isNativePlatform()) {
     try {
+      // IMPORTANT (iOS fix): iOS does NOT auto-prompt for camera permission on the
+      // first getPhoto() call the way Android does. If permission was never
+      // requested, the camera silently fails to open. So we explicitly check and
+      // request camera permission first.
+      try {
+        const perm = await Camera.checkPermissions();
+        if (perm.camera !== 'granted') {
+          const requested = await Camera.requestPermissions({ permissions: ['camera'] });
+          if (requested.camera === 'denied') {
+            console.warn('[Camera] Camera permission denied by user');
+            return null;
+          }
+        }
+      } catch (permErr) {
+        console.warn('[Camera] checkPermissions unavailable, continuing:', permErr);
+      }
+
       const image = await Camera.getPhoto({
         quality: 80,
         allowEditing: false,
         resultType: CameraResultType.DataUrl,
-        source: CameraSource.Prompt,
+        // CAMERA ONLY: force the live camera. Do NOT use CameraSource.Prompt or
+        // CameraSource.Photos — the inspection workflow requires freshly-captured,
+        // timestamped/geotagged photos, so selecting from the gallery is disallowed.
+        source: CameraSource.Camera,
         width: 1200,
         height: 1200,
+        correctOrientation: true,
+        saveToGallery: false,
       });
 
       if (!image || !image.dataUrl) return null;
@@ -147,21 +169,42 @@ export async function capturePhoto(): Promise<Photo | null> {
         gpsLat: lat,
         gpsLng: lng,
       };
-    } catch {
+    } catch (err: any) {
+      // Surface real errors so native camera failures are diagnosable instead of
+      // silently returning null. A user cancelling the camera also lands here.
+      const msg = String(err?.message || err || '');
+      if (!/cancel/i.test(msg)) {
+        console.warn('[Camera] getPhoto failed:', msg);
+      }
       return null;
     }
   }
 
-  // Web fallback: use HTML file input
+  // Web fallback: use HTML file input.
+  // IMPORTANT: iOS Safari (and some in-app WebViews) can silently fail to open
+  // the camera/photo picker when calling .click() on a file input that was
+  // never attached to the DOM. Attaching it (hidden, off-screen) and cleaning
+  // it up afterwards makes this reliable across iPhone browsers/PWA contexts.
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
     input.capture = 'environment';
+    input.style.position = 'fixed';
+    input.style.top = '-9999px';
+    input.style.left = '-9999px';
+    input.style.opacity = '0';
+
+    const cleanup = () => {
+      if (input.parentNode) {
+        input.parentNode.removeChild(input);
+      }
+    };
 
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) {
+        cleanup();
         resolve(null);
         return;
       }
@@ -185,6 +228,7 @@ export async function capturePhoto(): Promise<Photo | null> {
           }
         }
 
+        cleanup();
         resolve({
           id: generateId(),
           url: dataUrl,
@@ -193,13 +237,37 @@ export async function capturePhoto(): Promise<Photo | null> {
           gpsLng: lng,
         });
       } catch {
+        cleanup();
         resolve(null);
       }
     };
 
-    input.oncancel = () => resolve(null);
+    input.oncancel = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    document.body.appendChild(input);
     input.click();
   });
+}
+
+/**
+ * Safely navigate "back" using browser/router history when available,
+ * falling back to a known-good route otherwise.
+ *
+ * Why this is needed: some contexts (a freshly-launched native app/WKWebView,
+ * a PWA opened via a deep link, or a page reload) have no previous history
+ * entry. Calling `navigate(-1)` in those cases is a silent no-op, which makes
+ * the in-app "back" button appear broken/missing — especially noticeable on
+ * iPhone where there is no OS-level back gesture/button to fall back on.
+ */
+export function safeGoBack(navigate: (path: string, options?: { replace?: boolean }) => void, fallback: string = '/'): void {
+  if (typeof window !== 'undefined' && window.history && window.history.length > 1) {
+    navigate(-1 as unknown as string);
+  } else {
+    navigate(fallback, { replace: true });
+  }
 }
 
 function compressImage(file: File, maxWidth: number, quality: number): Promise<Blob> {

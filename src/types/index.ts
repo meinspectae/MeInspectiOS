@@ -128,6 +128,7 @@ export interface PaymentInfo {
   transactionId?: string;
   discountCode?: string;
   discountAmount?: number;
+  sessionId?: string;
 }
 
 export interface PropertyTemplate {

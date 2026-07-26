@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useInspectionStore } from '../store/inspectionStore';
 import { getPropertyTypeLabel } from '../data/propertyTemplates';
-import { capturePhoto } from '../utils/helpers';
+import { capturePhoto, safeGoBack } from '../utils/helpers';
 import SignaturePad from '../components/SignaturePad';
 import PhoneInput from '../components/PhoneInput';
 import PaymentModal from '../components/PaymentModal';
@@ -271,7 +271,7 @@ export default function InspectionForm() {
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-center gap-3 mb-4">
-          <button aria-label="Go back" onClick={() => navigate(-1)} className="p-2 rounded-lg hover:bg-slate-100 transition-colors">
+          <button aria-label="Go back" onClick={() => safeGoBack(navigate, '/')} className="p-2 rounded-lg hover:bg-slate-100 transition-colors">
             <svg className="w-5 h-5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>

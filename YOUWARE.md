@@ -49,6 +49,14 @@ Backend (Cloudflare Workers + D1)
   - All pages: Timestamp, Report ID, Geolocation, IP Address, Page numbers
   - Tamper-proof: SHA-256 hash of report data for integrity verification
 
+## Report PDF Fixes (2026-07-21)
+- **Logo**: `PageHeader` in `ReportPage.tsx` now renders the real `/meinspect-logo.png` image on every page instead of a placeholder blue "M" box.
+- **Image stretching**: Cover photo, room-item photos, and signature images were switched from `<img style={{objectFit}}>` to `<div style={{backgroundImage, backgroundSize:'cover'/'contain'}}>` because `html2canvas` (used internally by `html2pdf.js`) does not reliably respect CSS `object-fit` on `<img>` tags, causing visible stretching/distortion in the exported PDF.
+- **Blank page space**: Previously every logical section (cover, disclaimer, each room, signatures) was forced into a fixed `height`/`minHeight: 1040px` flex-column div with the footer pinned via `marginTop: 'auto'`, wasting most of the page when content was short. Fixed by removing the forced page height so each section's div shrinks to its actual content height; `pageBreakAfter: 'always'` still forces a fresh PDF page at each section boundary. Rooms are now additionally grouped by an estimated-height greedy packer (`roomGroups` in `ReportPage.tsx`) so multiple short rooms share one physical page instead of each room getting its own near-empty page.
+- **Report filename/title**: Both the exported PDF filename (`opt.filename`) and the print-window `<title>` now use `reportTitleString` = `PropertyName-Address-OwnerName-Date` (sanitized via `sanitizeFilename()`), instead of a generic `Property-Inspection-Report-<id>.pdf`.
+- `scripts/generate-sample-report.py` mirrors the same fixes (real logo, natural page heights) for the bundled `public/sample-inspection-report.pdf` demo file.
+- **Known local-preview limitation**: `vite preview`/`vite dev` serve the frontend from `http://127.0.0.1`, while auth (`@edgespark/client`/better-auth) issues session cookies scoped for the production HTTPS domain. Cross-origin session cookies cannot be set/read over plain HTTP, so email/password and anonymous sign-in cannot be fully exercised from a local preview — this is a sandbox/testing-environment limitation, not a bug in deployed production (same-origin HTTPS).
+
 ## Backend Integration
 - **Authentication**: Youware platform auth via X-Encrypted-Yw-ID header
 - **Database**: Cloudflare D1 (SQLite-compatible) with user-scoped data
@@ -119,10 +127,65 @@ Backend (Cloudflare Workers + D1)
 - **History card layout**: Moved action buttons below content instead of alongside (prevents text wrapping on mobile)
 - **Profile name not saving**: Settings page now sends `name` to backend `/api/user/profile` endpoint; backend now accepts and saves `name` field
 
+## iPhone / Mobile Web (PWA) Fixes (2026-07-22)
+- **"Add Photo" not opening the camera/picker on iPhone**: `capturePhoto()`'s web (non-Capacitor) fallback created a `<input type="file">` and called `.click()` on it without ever attaching it to the DOM — iOS Safari/WebViews can silently swallow `.click()` on detached file inputs. Fixed by appending the input (hidden, off-screen) to `document.body` before `.click()`, removing it after selection/cancel. See `capturePhoto()` in `src/utils/helpers.ts`.
+- **Tapping a field zooms in and never zooms back out on iPhone**: iOS Safari auto-zooms on focus when a field's computed font-size is below 16px (most fields here use Tailwind `text-sm` = 14px). Fixed via `index.html` viewport meta (`maximum-scale=1.0, user-scalable=no`) plus a `@media (max-width: 768px)` rule in `src/index.css` forcing `input/textarea/select` to 16px as defense-in-depth.
+- **No way to navigate back on iPhone**: In-app back buttons called `navigate(-1)` directly, which is a silent no-op when there's no previous history entry (fresh PWA launch, deep link, native WKWebView cold start) — and iOS has no OS-level back gesture to fall back on. Added `safeGoBack(navigate, fallbackPath)` in `src/utils/helpers.ts` (checks `window.history.length`, falls back to a safe route) and wired it into `InspectionForm`, `ReportPage`, `PaymentHistoryPage` back buttons.
+- **"Install MeInspect" banner still shown after installing (Android + iOS)**: Visibility only checked `display-mode: standalone`/`navigator.standalone`, missing the Capacitor native app (Android's WebView can still fire `beforeinstallprompt`). `index.html` now also checks `window.Capacitor.isNativePlatform()`, listens for `appinstalled` to hide the banner + persist the dismissed flag immediately, and gates the banner before its 3s show-timer (not just on `load`).
+
+## Pre-Publish Audit — Round 2 (2026-07-23)
+- **Camera ONLY, no gallery (FIXED)**: `capturePhoto()` in `src/utils/helpers.ts` now uses `CameraSource.Camera` (was `CameraSource.Prompt`) so the inspection workflow can ONLY take a fresh photo with the live camera — the "Photo Library / gallery" option is removed. Also added explicit `Camera.checkPermissions()` + `Camera.requestPermissions({permissions:['camera']})` before `getPhoto` (fixes iOS silently not opening the camera on first use), `correctOrientation:true`, `saveToGallery:false`, and real error logging in the previously-empty catch.
+- **App icon replaced (both platforms)**: User-provided logo (`chat/wv72g7uo7w.jpg`, house+eye+green-check + wordmark) processed with `sharp`. Because a wordmark is illegible at icon sizes, the brand SYMBOL is extracted (crop top region + trim whitespace) and centered:
+  - Source masters written to `assets/icon.png` (symbol on white, no-alpha for iOS), `assets/icon-foreground.png` (symbol on transparent, ~62% safe zone), `assets/icon-background.png` (white). Regenerator: `scripts/make-icons.mjs`.
+  - Native icons generated by `scripts/generate-native-icons.mjs` (uses local sharp 0.35.x; NOTE: `@capacitor/assets` CLI fails here because its bundled sharp 0.32.6 native binary isn't built under pnpm):
+    - iOS: `ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png` (1024×1024, alpha removed — App Store requirement).
+    - Android: `mipmap-{mdpi..xxxhdpi}/ic_launcher.png` (square), `ic_launcher_round.png` (circular mask), `ic_launcher_foreground.png` (adaptive foreground). Adaptive background stays white (`@color/ic_launcher_background = #FFFFFF`).
+  - In-app/PWA `public/meinspect-logo.png` refreshed to 512×512.
+- **Live E2E on https://app.meinspect.com (login aalekh.dxb@gmail.com)**: Login ✓ (email/password → redirects to dashboard), Dashboard ✓ (Welcome Aalekh, 6 completed), History ✓ (`GET /api/sync/inspections` 200, "Synced"), Settings ✓ (`GET /api/user/profile` 200, profile loads), New Inspection wizard ✓ (property-type step), Report page ✓ (loads with payment gate). No 4xx/5xx app errors observed. DB connectivity + sync confirmed. (Automation note: the login form is a React controlled form — programmatic `fill` alone doesn't update state; use `fill` then submit via Enter.)
+- **Rollback note**: A prior session's identical fixes (camera, TS type fixes, version bump) had been rolled back before this session, so they were re-applied here. TypeScript `tsc --noEmit` is clean; production build succeeds; `npx cap sync` run for both platforms; Android bumped to `versionCode 4` / `versionName "3.1"`.
+
+## Registration / Welcome Email + Native-iOS Diagnosis (2026-07-24)
+Investigation of "no welcome email on registration" + native-iOS API concerns:
+- **Root cause of missing welcome email**: `SignUpPage.handleSignup` sent the welcome
+  email only inside `if (session.data?.user)` and hit the **authenticated** endpoint
+  `/api/notifications/welcome`. But sign-up requires email verification, so
+  `signUp.email()` returns `token: null` → **no session exists at that moment** → the
+  welcome block never ran. On native (iOS/Android WebView) the app is cross-origin to
+  the backend, so the edge-spark auth token isn't auto-injected either → the authed
+  endpoint would 401. Result: welcome email was never sent.
+- **Fix**: Added a **public, self-verifying** endpoint `POST /api/public/notifications/welcome`
+  that looks the email up in `es_system__auth_user` and only sends to a genuinely
+  registered account created within the last 30 minutes (anti-abuse). `SignUpPage` now
+  calls it **unconditionally** after a successful sign-up (works on web AND native, no
+  session/token required). Profile save (`/api/user/profile`) stays session-gated.
+- **Resend health = OK (verified live)**: `sendNotificationEmail()` now logs and returns
+  the exact Resend result (`{ok,id,error,status}`). A live end-to-end send to
+  `delivered@resend.dev` returned `{"success":true}` → **RESEND_API_KEY valid + sender
+  domain verified + Resend reachable**. DNS confirms Resend verification records
+  (`resend._domainkey.meinspect.com` DKIM + `send.meinspect.com` SPF `include:amazonses.com`).
+  So the failure was purely the frontend session-gate, not Resend.
+- **Release build API URL = clean**: `dist/assets/*.js` and native `capacitor.config.json`
+  (ios + android) contain **no localhost/staging URL**; API client (`src/api/client.ts`)
+  uses `VITE_BACKEND_URL || https://olkmxpl1sliijytnc48w.youbase.cloud`.
+- **Native iOS CORS = permitted**: backend responds with
+  `access-control-allow-origin: capacitor://localhost` + `access-control-allow-credentials: true`.
+- **Live E2E on https://app.meinspect.com (aalekh.dxb@gmail.com)**: Login ✓, Dashboard ✓
+  (Welcome Aalekh, 6 completed), History ✓ (`GET /api/sync/inspections` 200, "Synced"),
+  Settings ✓ (`GET /api/user/profile` 200), New Inspection wizard ✓, Report page ✓
+  (payment gate shown). No 4xx/5xx. Automation note: the React login form ignores
+  synthetic button-click/Enter from agent-browser — submit via `form.requestSubmit()`
+  (or a real device tap); this is an automation quirk, not an app bug.
+- **Auth base path** is `/api/_es/auth/*` (not `/api/auth/*`).
+- **Deploy note**: backend fix is on **staging**; it goes live on production/native only
+  after **Publish**. A throwaway `delivered@resend.dev` diag account remains in Users
+  (DELETE is guarded); remove via YouBase → Users if desired.
+
 ## Build Commands
 - `npm run dev` — Development server
 - `npm run build` — Production build
 - `npm run cap:sync` — Sync to native projects
+- `node scripts/make-icons.mjs` — Rebuild icon masters from source logo
+- `node scripts/generate-native-icons.mjs` — Regenerate iOS + Android launcher icons
 
 ## Android / Play Store
 - **Target SDK**: 36 (Android 16) — meets Google's API 35+ requirement

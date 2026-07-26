@@ -13,6 +13,7 @@ import {
   formatDate,
   formatDateTime,
   generateReportHash,
+  safeGoBack,
 } from '../utils/helpers';
 import {
   getPropertyTypeLabel,
@@ -42,14 +43,7 @@ function PageHeader({ inspection, reportHash }: { inspection: any; reportHash: s
       color: '#64748b',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <div style={{
-          width: '18px', height: '18px',
-          background: 'linear-gradient(135deg, #2563eb, #1e40af)',
-          borderRadius: '5px',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <span style={{ color: '#fff', fontSize: '9px', fontWeight: '800' }}>M</span>
-        </div>
+        <img src="/meinspect-logo.png" alt="MeInspect" style={{ width: '18px', height: '18px', objectFit: 'contain', borderRadius: '4px', display: 'block' }} />
         <span style={{ fontWeight: '700', color: '#1e293b', fontSize: '9px' }}>MeInspect</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -250,7 +244,7 @@ export default function ReportPage() {
   // Retry fetching location and IP if missing (e.g., permission was slow)
   useEffect(() => {
     if (!inspection) return;
-    const meta = inspection.meta || {};
+    const meta: Partial<typeof inspection.meta> = inspection.meta || {};
     const needsLocation = !meta.location || typeof meta.location.latitude !== 'number';
     const needsIp = !meta.ipAddress;
     if (!needsLocation && !needsIp) return;
@@ -371,6 +365,51 @@ export default function ReportPage() {
     inspection.property.city,
   ].filter(Boolean).join(', ') || '—';
 
+  // Owner's name for report title/filename (landlord is treated as the property owner)
+  const ownerName = inspection.landlord?.name || 'Owner';
+  const reportDateStr = formatDate(inspection.completedAt || inspection.updatedAt || new Date().toISOString());
+
+  const sanitizeFilename = (s: string) => s
+    .replace(/[\\/:*?"<>|]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s/g, '-');
+
+  // Report title/filename: Address, Owner's name, Date — short identifiable string
+  const reportTitleString = sanitizeFilename(
+    `${propertyDisplayName}-${propertyAddress}-${ownerName}-${reportDateStr}`.replace(/—/g, '-')
+  );
+
+  // Group rooms into page-groups so short rooms share a page instead of
+  // each room forcing its own (mostly blank) full page.
+  const ROOM_PAGE_BUDGET = A4_CONTENT_HEIGHT - 80;
+  const estimateRoomHeight = (room: typeof inspection.rooms[number]) => {
+    let h = 46; // section title + room header row
+    room.items.forEach((item) => {
+      h += 34;
+      if (item.comments) h += 14;
+      if (item.photos && item.photos.length > 0) h += 92;
+    });
+    if (room.overallComments) h += 32;
+    return h;
+  };
+  const roomGroups: Array<typeof inspection.rooms> = [];
+  {
+    let current: typeof inspection.rooms = [];
+    let currentHeight = 0;
+    inspection.rooms.forEach((room) => {
+      const h = estimateRoomHeight(room);
+      if (current.length > 0 && currentHeight + h > ROOM_PAGE_BUDGET) {
+        roomGroups.push(current);
+        current = [];
+        currentHeight = 0;
+      }
+      current.push(room);
+      currentHeight += h;
+    });
+    if (current.length > 0) roomGroups.push(current);
+  }
+
   const handleDownloadClick = () => {
     if (!isPaid) {
       setShowPaymentModal(true);
@@ -422,8 +461,8 @@ export default function ReportPage() {
 
       const opt = {
         margin: [8, 0, 8, 0] as [number, number, number, number],
-        filename: `Property-Inspection-Report-${inspection.property.makaniNumber || inspection.id.slice(0, 8)}.pdf`,
-        image: { type: 'jpeg', quality: 0.92 },
+        filename: `${reportTitleString}.pdf`,
+        image: { type: 'jpeg' as const, quality: 0.92 },
         html2canvas: {
           scale: 2,
           useCORS: true,
@@ -564,7 +603,7 @@ export default function ReportPage() {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Property Inspection Report - ${propertyDisplayName}</title>
+        <title>${reportTitleString}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -617,7 +656,7 @@ export default function ReportPage() {
     <div className="max-w-4xl mx-auto px-2 sm:px-0">
       {/* Action Bar */}
       <div className="flex items-center justify-between mb-4 no-print flex-wrap gap-2">
-        <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-slate-600 hover:text-slate-800 text-sm font-medium">
+        <button onClick={() => safeGoBack(navigate, '/history')} className="flex items-center gap-2 text-slate-600 hover:text-slate-800 text-sm font-medium">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
@@ -720,7 +759,7 @@ export default function ReportPage() {
           }}
         >
           {/* Cover Page */}
-          <div style={{ pageBreakAfter: 'always', display: 'flex', flexDirection: 'column', height: `${A4_PAGE_HEIGHT}px`, overflow: 'hidden' }}>
+          <div style={{ pageBreakAfter: 'always', display: 'flex', flexDirection: 'column' }}>
             {hdr}
             <div style={{ background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)', padding: '18px 40px 16px', textAlign: 'center' }}>
               <h1 style={{ color: '#ffffff', fontSize: '18px', fontWeight: '800', letterSpacing: '-0.3px', lineHeight: '1.2', marginBottom: '2px' }}>
@@ -736,7 +775,7 @@ export default function ReportPage() {
             </div>
             {coverPhoto && coverPhoto.url && (
               <div style={{ padding: '10px 40px', textAlign: 'center' }}>
-                <img src={coverPhoto.url} alt="Property exterior" style={{ maxWidth: '380px', width: '100%', height: 'auto', maxHeight: '180px', objectFit: 'contain', borderRadius: '10px', border: '1px solid #e2e8f0', display: 'block', margin: '0 auto' }} />
+                <div style={{ width: '100%', maxWidth: '380px', height: '180px', backgroundImage: `url(${coverPhoto.url})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat', borderRadius: '10px', border: '1px solid #e2e8f0', margin: '0 auto' }} />
                 <div style={{ fontSize: '8px', color: '#94a3b8', marginTop: '4px' }}>📷 {formatDateTime(coverPhoto.timestamp)}</div>
               </div>
             )}
@@ -798,7 +837,7 @@ export default function ReportPage() {
           </div>
 
           {/* Disclaimer Page */}
-          <div style={{ pageBreakAfter: 'always', display: 'flex', flexDirection: 'column', minHeight: `${A4_PAGE_HEIGHT}px` }}>
+          <div style={{ pageBreakAfter: 'always', display: 'flex', flexDirection: 'column' }}>
             {hdr}
             <div style={{ padding: '16px 40px', flex: 1 }}>
               <div style={{ marginBottom: '10px', paddingBottom: '6px', borderBottom: '2px solid #2563eb' }}>
@@ -835,12 +874,13 @@ export default function ReportPage() {
             {ftr(2)}
           </div>
 
-          {/* Room Assessments */}
-          {inspection.rooms.map((room, rIdx) => (
-            <div key={room.id} style={{ pageBreakAfter: 'always', display: 'flex', flexDirection: 'column', minHeight: `${A4_PAGE_HEIGHT}px` }}>
+          {/* Room Assessments — grouped to minimize blank page space */}
+          {roomGroups.map((group, gIdx) => (
+            <div key={`room-group-${gIdx}`} style={{ pageBreakAfter: 'always', display: 'flex', flexDirection: 'column' }}>
               {hdr}
               <div style={{ padding: '16px 40px', flex: 1 }}>
-                <ReportSection title={`${room.name} Assessment`} icon="🔍" accentColor="#ea580c">
+                {group.map((room) => (
+                <ReportSection key={room.id} title={`${room.name} Assessment`} icon="🔍" accentColor="#ea580c">
                   <div style={{ border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
                     <div style={{ background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)', borderBottom: '1px solid #e2e8f0', padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -867,16 +907,16 @@ export default function ReportPage() {
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
                               {item.photos.map((photo: any) => photo.url && (
                                 <div key={photo.id} style={{ position: 'relative' }}>
-                                  <img
-                                    src={photo.url}
-                                    alt={`${item.name} photo`}
+                                  <div
                                     style={{
                                       width: '100px',
                                       height: '75px',
-                                      objectFit: 'cover',
+                                      backgroundImage: `url(${photo.url})`,
+                                      backgroundSize: 'cover',
+                                      backgroundPosition: 'center',
+                                      backgroundRepeat: 'no-repeat',
                                       borderRadius: '6px',
                                       border: '1px solid #e2e8f0',
-                                      display: 'block',
                                     }}
                                   />
                                   {photo.timestamp && (
@@ -899,13 +939,14 @@ export default function ReportPage() {
                     </div>
                   )}
                 </ReportSection>
+                ))}
               </div>
-              {ftr(3 + rIdx)}
+              {ftr(3 + gIdx)}
             </div>
           ))}
 
           {/* Signatures Page */}
-          <div style={{ display: 'flex', flexDirection: 'column', minHeight: `${A4_PAGE_HEIGHT}px` }}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
             {hdr}
             <div style={{ padding: '16px 40px', flex: 1 }}>
               <div style={{ marginBottom: '10px', paddingBottom: '6px', borderBottom: '2px solid #2563eb' }}>
@@ -935,7 +976,7 @@ export default function ReportPage() {
                   <div key={sig.role} style={{ border: '1.5px solid #e2e8f0', borderRadius: '10px', padding: '10px', textAlign: 'center', background: '#fafafa' }}>
                     <div style={{ fontSize: '7px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', marginBottom: '6px', letterSpacing: '0.5px' }}>{sig.role}</div>
                     {sig.dataUrl ? (
-                      <img src={sig.dataUrl} alt={`${sig.role} signature`} style={{ maxWidth: '100%', height: '50px', objectFit: 'contain', margin: '0 auto', display: 'block' }} />
+                      <div style={{ width: '100%', height: '50px', backgroundImage: `url(${sig.dataUrl})`, backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }} />
                     ) : (
                       <div style={{ height: '50px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: '8px' }}>No signature</div>
                     )}
@@ -961,7 +1002,7 @@ export default function ReportPage() {
                 </div>
               </div>
             </div>
-            {ftr(4 + inspection.rooms.length)}
+            {ftr(3 + roomGroups.length)}
           </div>
         </div>
       </div>

@@ -119,16 +119,20 @@ export default function SignUpPage() {
         } catch (profileErr) {
           console.warn('Failed to save profile data:', profileErr);
         }
+      }
 
-        try {
-          await client.api.fetch('/api/notifications/welcome', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, email }),
-          });
-        } catch (emailErr) {
-          console.warn('Failed to send welcome email:', emailErr);
-        }
+      // Send the welcome email via the PUBLIC endpoint. This must run regardless of
+      // whether a session was established (email-verification flows do NOT create a
+      // session, and native mobile is cross-origin so the auth token isn't injected).
+      // The backend verifies the email belongs to the freshly-created account.
+      try {
+        await client.api.fetch('/api/public/notifications/welcome', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email }),
+        });
+      } catch (emailErr) {
+        console.warn('Failed to send welcome email:', emailErr);
       }
 
       try {

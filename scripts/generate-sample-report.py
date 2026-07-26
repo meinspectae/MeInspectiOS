@@ -95,10 +95,7 @@ PAGE_HEADER = f"""
             align-items:center;justify-content:space-between;background:#ffffff;
             font-size:8px;color:#64748b;">
   <div style="display:flex;align-items:center;gap:6px;">
-    <div style="width:18px;height:18px;background:linear-gradient(135deg,#2563eb,#1e40af);
-                border-radius:5px;display:flex;align-items:center;justify-content:center;">
-      <span style="color:#fff;font-size:9px;font-weight:800;">M</span>
-    </div>
+    <img src="file:///workspace/public/meinspect-logo.png" alt="MeInspect" style="width:20px;height:20px;object-fit:contain;border-radius:4px;" />
     <span style="font-weight:700;color:#1e293b;font-size:9px;">MeInspect</span>
   </div>
   <div style="display:flex;align-items:center;gap:12px;">
@@ -145,7 +142,7 @@ def mini_stat(label, value, color):
 # ---------------------------------------------------------------------------
 PAGE_COVER = f"""
 <div style="page-break-after:always;display:flex;flex-direction:column;
-            height:{A4_HEIGHT}px;overflow:hidden;background:#ffffff;">
+            background:#ffffff;">
   {PAGE_HEADER}
 
   <!-- Blue title bar -->
@@ -252,7 +249,7 @@ PAGE_COVER = f"""
 # ---------------------------------------------------------------------------
 PAGE_DISCLAIMER = f"""
 <div style="page-break-after:always;display:flex;flex-direction:column;
-            min-height:{A4_HEIGHT}px;background:#ffffff;">
+            background:#ffffff;">
   {PAGE_HEADER}
   <div style="padding:16px 40px;flex:1;">
     <div style="margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #2563eb;">
@@ -415,7 +412,7 @@ def render_room_page(room):
 
     return f"""
 <div style="page-break-after:always;display:flex;flex-direction:column;
-            min-height:{A4_HEIGHT}px;background:#ffffff;">
+            background:#ffffff;">
   {PAGE_HEADER}
   <div style="padding:16px 40px;flex:1;">
     <!-- Room section header matching app's ReportSection component -->
@@ -457,7 +454,7 @@ def render_room_page(room):
 # PAGE LAST — Signatures Page
 # ---------------------------------------------------------------------------
 PAGE_SIGNATURES = f"""
-<div style="display:flex;flex-direction:column;min-height:{A4_HEIGHT}px;background:#ffffff;">
+<div style="display:flex;flex-direction:column;background:#ffffff;">
   {PAGE_HEADER}
   <div style="padding:16px 40px;flex:1;">
     <div style="margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #2563eb;">
@@ -560,7 +557,7 @@ HTML = f"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>MeInspect – Property Condition Report (Sample)</title>
+<title>Marina Heights Tower A Unit 1204, Dubai Marina - Mohammed Al Sayed - {TIMESTAMP.split(',')[0]}</title>
 <style>
   /* Reset */
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -599,7 +596,8 @@ print("Now generating PDF...")
 # ---------------------------------------------------------------------------
 # Generate PDF with headless Chromium
 # ---------------------------------------------------------------------------
-pdf_path = "/workspace/chat/sample-inspection-report.pdf"
+pdf_filename = f"Marina-Heights-Tower-A-Unit-1204-Dubai-Marina-Mohammed-Al-Sayed-{TIMESTAMP.split(',')[0].replace(' ', '-')}.pdf"
+pdf_path = "/workspace/chat/" + pdf_filename
 result = subprocess.run([
     "/usr/bin/chromium",
     "--no-sandbox",

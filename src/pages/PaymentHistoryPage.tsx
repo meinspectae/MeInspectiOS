@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { client } from '../api/client';
 import { Order } from '../types';
-import { formatDateTime } from '../utils/helpers';
+import { formatDateTime, safeGoBack } from '../utils/helpers';
 
 export default function PaymentHistoryPage() {
   const navigate = useNavigate();
@@ -65,7 +65,7 @@ export default function PaymentHistoryPage() {
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-2">
-          <button onClick={() => navigate(-1)} className="p-2 rounded-lg hover:bg-slate-100 transition-colors">
+          <button onClick={() => safeGoBack(navigate, '/settings')} className="p-2 rounded-lg hover:bg-slate-100 transition-colors">
             <svg className="w-5 h-5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>

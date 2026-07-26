@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#2563eb" />
     <meta name="description" content="MeInspect - Professional Property Condition Reports for Landlords, Tenants & Inspectors" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -60,11 +60,11 @@
       /* Safe area padding for notched devices */
       .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom); }
     </style>
-    <script type="module" crossorigin src="/assets/index-BPk7N96s.js"></script>
+    <script type="module" crossorigin src="/assets/index-CYrpuunp.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/vendor-react-uZfIy3Xp.js">
     <link rel="modulepreload" crossorigin href="/assets/vendor-ui-BSF523tx.js">
     <link rel="modulepreload" crossorigin href="/assets/vendor-zustand-Bcy3N71k.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-D8PWPm0B.css">
+    <link rel="stylesheet" crossorigin href="/assets/index-DytmaQ65.css">
   </head>
   <body>
     <div id="root"></div>
@@ -80,9 +80,34 @@
 
       // PWA install prompt
       let deferredPrompt;
+
+      function isRunningAsInstalledApp() {
+        // Native Capacitor app (Android/iOS) — Capacitor injects window.Capacitor
+        // before page scripts run, so this check is reliable here.
+        if (window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) {
+          return true;
+        }
+        // PWA installed and launched from home screen (Android/Chrome + iOS Safari)
+        if (window.matchMedia('(display-mode: standalone)').matches) return true;
+        if (window.navigator.standalone === true) return true;
+        return false;
+      }
+
+      function hideInstallBanner() {
+        const banner = document.getElementById('pwa-install-banner');
+        if (banner) {
+          banner.classList.remove('show');
+          banner.style.display = 'none';
+        }
+      }
+
       window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
         deferredPrompt = e;
+        // Never show the install banner inside the native app or an already-installed PWA
+        if (isRunningAsInstalledApp() || localStorage.getItem('pwa-install-dismissed') === 'true') {
+          return;
+        }
         // Show install banner after 3 seconds
         setTimeout(() => {
           const banner = document.getElementById('pwa-install-banner');
@@ -90,33 +115,37 @@
         }, 3000);
       });
 
+      // Fires once the PWA install actually completes (Chrome/Edge/Android).
+      window.addEventListener('appinstalled', () => {
+        localStorage.setItem('pwa-install-dismissed', 'true');
+        deferredPrompt = null;
+        hideInstallBanner();
+      });
+
       function installPWA() {
         if (deferredPrompt) {
           deferredPrompt.prompt();
           deferredPrompt.userChoice.then((choiceResult) => {
             if (choiceResult.outcome === 'accepted') {
-              document.getElementById('pwa-install-banner').classList.remove('show');
+              localStorage.setItem('pwa-install-dismissed', 'true');
+              hideInstallBanner();
             }
             deferredPrompt = null;
           });
+        } else {
+          hideInstallBanner();
         }
       }
 
       function dismissInstall() {
-        document.getElementById('pwa-install-banner').classList.remove('show');
+        hideInstallBanner();
         localStorage.setItem('pwa-install-dismissed', 'true');
       }
 
-      // Don't show if already dismissed
+      // Don't show if already dismissed, already installed, or running as the native app
       window.addEventListener('load', () => {
-        if (localStorage.getItem('pwa-install-dismissed') === 'true') {
-          const banner = document.getElementById('pwa-install-banner');
-          if (banner) banner.style.display = 'none';
-        }
-        // Also hide if app is already installed (running in standalone mode)
-        if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
-          const banner = document.getElementById('pwa-install-banner');
-          if (banner) banner.style.display = 'none';
+        if (localStorage.getItem('pwa-install-dismissed') === 'true' || isRunningAsInstalledApp()) {
+          hideInstallBanner();
         }
       });
     </script>

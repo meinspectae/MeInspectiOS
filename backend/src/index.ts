@@ -1082,14 +1082,25 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
 
   // ==================== NOTIFICATION ENDPOINTS ====================
 
-  // Helper to send notification emails via Resend
-  async function sendNotificationEmail(edgespark: any, to: string, subject: string, html: string): Promise<boolean> {
+  // Helper to send notification emails via Resend.
+  // Returns a detailed result so callers/logs can diagnose Resend failures
+  // (missing key, unverified sender domain, invalid recipient, network error, etc).
+  async function sendNotificationEmail(
+    edgespark: any,
+    to: string,
+    subject: string,
+    html: string
+  ): Promise<{ ok: boolean; id?: string; error?: string; status?: number }> {
     const apiKey = edgespark.secret.get('RESEND_API_KEY');
+    const fromEmail = edgespark.secret.get('FROM_EMAIL') || 'MeInspect <hello@meinspect.com>';
+
     if (!apiKey) {
-      console.warn('[NOTIFICATIONS] RESEND_API_KEY not configured');
-      return false;
+      console.error('[NOTIFICATIONS] RESEND_API_KEY not configured — email NOT sent to', to);
+      return { ok: false, error: 'RESEND_API_KEY not configured' };
     }
+
     try {
+      console.log(`[NOTIFICATIONS] Sending "${subject}" to ${to} from ${fromEmail}`);
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -1097,18 +1108,101 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: edgespark.secret.get('FROM_EMAIL') || 'MeInspect <hello@meinspect.com>',
+          from: fromEmail,
           to: [to],
           subject,
           html,
         }),
       });
-      return res.ok;
+
+      const data = (await res.json().catch(() => ({}))) as any;
+      if (res.ok) {
+        console.log(`[NOTIFICATIONS] Resend accepted email to ${to} — id: ${data.id}`);
+        return { ok: true, id: data.id, status: res.status };
+      }
+
+      // Resend rejected — surface the exact reason (e.g. unverified domain / invalid key)
+      const errMsg = data.message || data.error || data.name || `HTTP ${res.status}`;
+      console.error(`[NOTIFICATIONS] Resend REJECTED email to ${to} (status ${res.status}):`, errMsg, data);
+      return { ok: false, error: errMsg, status: res.status };
     } catch (err) {
-      console.error('[NOTIFICATIONS] Failed to send email:', err);
-      return false;
+      console.error('[NOTIFICATIONS] Network error sending email to', to, ':', err);
+      return { ok: false, error: err instanceof Error ? err.message : 'Network error' };
     }
   }
+
+  // Shared welcome-email HTML builder
+  function buildWelcomeHtml(name?: string): string {
+    return `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
+        <div style="text-align: center; margin-bottom: 32px;">
+          <h1 style="font-size: 24px; color: #1e293b; margin: 0;">Welcome to MeInspect</h1>
+          <p style="color: #64748b; font-size: 14px; margin-top: 8px;">Professional Property Condition Reports</p>
+        </div>
+        <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+          <p style="color: #334155; font-size: 15px; line-height: 1.6; margin: 0;">
+            Hi ${name || 'there'},<br/><br/>
+            Thank you for joining MeInspect! You can now create professional property condition reports with timestamped photos, detailed assessments, and digital signatures.
+          </p>
+        </div>
+        <div style="text-align: center;">
+          <a href="https://app.meinspect.com"
+             style="display: inline-block; background: #2563eb; color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">
+            Get Started
+          </a>
+        </div>
+        <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-top: 32px;">
+          MeInspect — Property Condition Reports for Landlords, Tenants & Inspectors
+        </p>
+      </div>
+    `;
+  }
+
+  // PUBLIC welcome email — safe to call right after signup without a session.
+  // Native mobile (iOS/Android WebView) is cross-origin to this backend, so the
+  // edge-spark auth token is NOT auto-injected there; a session-gated endpoint would
+  // silently 401 and no welcome email would ever be sent. This public endpoint avoids
+  // that by verifying the email against the auth-user table and only sending to a
+  // genuinely-registered, recently-created account (anti-abuse), so it works reliably
+  // on web AND native.
+  app.post('/api/public/notifications/welcome', async (c) => {
+    const { email, name } = await c.req.json().catch(() => ({}));
+    if (!email) return c.json({ error: 'email is required' }, 400);
+
+    // Verify this email belongs to a real, recently-created account
+    let authUser: any = null;
+    try {
+      const rows = await edgespark.db
+        .select()
+        .from(tables.esSystemAuthUser)
+        .where(eq(tables.esSystemAuthUser.email, String(email).toLowerCase().trim()));
+      authUser = rows[0] || null;
+    } catch (e) {
+      console.error('[NOTIFICATIONS] welcome lookup failed:', e);
+    }
+
+    if (!authUser) {
+      // Do not leak whether an email exists; just report no-op
+      console.warn('[NOTIFICATIONS] welcome requested for unknown email:', email);
+      return c.json({ success: false, error: 'not_registered' }, 200);
+    }
+
+    // Only send for accounts created within the last 30 minutes (fresh signup)
+    const createdAt = Number(authUser.createdAt || 0);
+    const ageMs = Date.now() - createdAt;
+    if (createdAt > 0 && ageMs > 30 * 60 * 1000) {
+      console.warn('[NOTIFICATIONS] welcome skipped — account not fresh:', email, 'ageMs:', ageMs);
+      return c.json({ success: false, error: 'not_fresh' }, 200);
+    }
+
+    const result = await sendNotificationEmail(
+      edgespark,
+      authUser.email,
+      'Welcome to MeInspect!',
+      buildWelcomeHtml(name || authUser.name)
+    );
+    return c.json({ success: result.ok, error: result.error });
+  });
 
   // Welcome email — sent after successful signup
   app.post('/api/notifications/welcome', async (c) => {
@@ -1141,8 +1235,8 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
       </div>
     `;
 
-    const sent = await sendNotificationEmail(edgespark, email, subject, html);
-    return c.json({ success: sent });
+    const result = await sendNotificationEmail(edgespark, email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
   });
 
   // Report completion email — sent after report is generated
@@ -1181,8 +1275,8 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
       </div>
     `;
 
-    const sent = await sendNotificationEmail(edgespark, email, subject, html);
-    return c.json({ success: sent });
+    const result = await sendNotificationEmail(edgespark, email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
   });
 
   // Payment success notification email
@@ -1229,8 +1323,8 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
       </div>
     `;
 
-    const sent = await sendNotificationEmail(edgespark, email, subject, html);
-    return c.json({ success: sent });
+    const result = await sendNotificationEmail(edgespark, email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
   });
 
   // Password changed notification email
@@ -1262,8 +1356,8 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
       </div>
     `;
 
-    const sent = await sendNotificationEmail(edgespark, email, subject, html);
-    return c.json({ success: sent });
+    const result = await sendNotificationEmail(edgespark, email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
   });
 
   return app;
