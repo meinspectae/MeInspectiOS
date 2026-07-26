@@ -26,6 +26,10 @@ workflows:
           npx cap add ios || true
           npx cap sync ios
 
+          # Inject Export Compliance key (Fixes 422 TestFlight submission error)
+          plutil -insert ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist || \
+          plutil -replace ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist
+
           # Inject required iOS location permission keys into Info.plist
           plutil -insert NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
           plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
@@ -69,3 +73,6 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
+        beta_groups:
+          - "Build15"
+          - "Build 18"
