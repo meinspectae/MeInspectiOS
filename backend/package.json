@@ -9,6 +9,9 @@
     "stripe": "^22.3.0"
   },
   "devDependencies": {
+    "@edgespark/devkit": "^0.0.1",
+    "@types/node": "^22.20.1",
+    "drizzle-kit": "^0.30.6",
     "typescript": "^5.9.3"
   }
 }

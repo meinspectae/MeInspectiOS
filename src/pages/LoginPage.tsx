@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Browser } from '@capacitor/browser';
+import { Capacitor } from '@capacitor/core';
 import { client } from '../api/client';
 import { useAuthStore } from '../store/authStore';
+import { startGoogleSignIn, subscribeToNativeOAuth } from '../utils/nativeOAuth';
 
 const GOOGLE_SVG = (
   <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -20,12 +23,20 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const isNativeIOS = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
 
   useEffect(() => {
     if (user) {
       navigate('/', { replace: true });
     }
   }, [user, navigate]);
+
+  useEffect(() => subscribeToNativeOAuth((result) => {
+    if (!result.ok) {
+      setError(result.error);
+      setLoading(false);
+    }
+  }), []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,14 +100,32 @@ export default function LoginPage() {
   };
 
   const handleGoogleSignIn = async () => {
+    setError('');
+    setLoading(true);
     try {
-      await client.auth.signIn.social({
-        provider: 'google',
-        callbackURL: `${window.location.origin}/`,
-      });
+      await startGoogleSignIn();
     } catch (err: any) {
       setError(err.message || 'Google sign-in failed. Please try again.');
+      setLoading(false);
     }
+  };
+
+  const handleSampleReport = async () => {
+    const appUrl = import.meta.env.VITE_APP_URL || 'https://app.meinspect.com';
+    const reportUrl = Capacitor.isNativePlatform()
+      ? `${appUrl}/sample-inspection-report.pdf`
+      : `${window.location.origin}/sample-inspection-report.pdf`;
+
+    if (Capacitor.isNativePlatform()) {
+      try {
+        await Browser.open({ url: reportUrl, presentationStyle: 'popover' });
+      } catch {
+        window.location.assign(reportUrl);
+      }
+      return;
+    }
+
+    window.open(reportUrl, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -116,21 +145,25 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
-            {/* Google Sign-In Button */}
-            <button
-              type="button"
-              onClick={handleGoogleSignIn}
-              className="w-full flex items-center justify-center gap-3 py-3 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
-            >
-              {GOOGLE_SVG}
-              Continue with Google
-            </button>
+            {/* Google Sign-In is hidden in the iOS app until Sign in with Apple is configured. */}
+            {!isNativeIOS && (
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                className="w-full min-h-11 flex items-center justify-center gap-3 py-3 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
+              >
+                {GOOGLE_SVG}
+                Continue with Google
+              </button>
+            )}
 
-            <div className="relative flex items-center my-4">
-              <div className="flex-1 border-t border-slate-200" />
-              <span className="mx-3 text-xs text-slate-400 bg-slate-50 px-2">or</span>
-              <div className="flex-1 border-t border-slate-200" />
-            </div>
+            {!isNativeIOS && (
+              <div className="relative flex items-center my-4">
+                <div className="flex-1 border-t border-slate-200" />
+                <span className="mx-3 text-xs text-slate-400 bg-slate-50 px-2">or</span>
+                <div className="flex-1 border-t border-slate-200" />
+              </div>
+            )}
 
             {error && (
               <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
@@ -241,19 +274,19 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {/* Sample Report Link */}
+          {/* Sample Report Button */}
           <div className="mt-6 text-center">
-            <a
-              href="/sample-inspection-report.pdf"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-blue-600 transition-colors group"
+            <button
+              type="button"
+              onClick={handleSampleReport}
+              className="inline-flex min-h-11 items-center gap-1.5 px-3 text-xs text-slate-500 hover:text-blue-600 transition-colors group"
+              aria-label="View sample inspection report"
             >
               <svg className="w-3.5 h-3.5 group-hover:text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
               View Sample Inspection Report
-            </a>
+            </button>
           </div>
         </div>
       </main>

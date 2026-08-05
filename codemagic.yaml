@@ -17,10 +17,10 @@ workflows:
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.meinspect.app"
     scripts:
-      - name: Generate iOS project & sync Capacitor
+      - name: Install dependencies & sync Capacitor
         script: | 
           npm install
-          chmod -R +x node_modules/.bin
+          chmod -R +x node_modules/.bin || true
           
           # Force Capacitor to generate/sync native iOS files
           npx cap add ios || true
@@ -40,24 +40,24 @@ workflows:
           # Force the generated Xcode project file to match com.meinspect.app
           sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = .*/PRODUCT_BUNDLE_IDENTIFIER = com.meinspect.app;/g' ios/App/App.xcodeproj/project.pbxproj
           
-          # Navigate into iOS directory
+          # Install CocoaPods dependencies for Capacitor plugins
           cd ios/App
-          
-          # Initialize Podfile if missing and install dependencies
-          if [ ! -f "Podfile" ]; then
-            pod init
-          fi
-          
           pod install
 
       - name: Set up code signing settings on Xcode project
         script: | 
           xcode-project use-profiles
 
-      - name: Increment build number
+      - name: Increment build number automatically
         script: | 
+          # Fetches latest build number from App Store Connect and increments it (+1)
+          # Ensures build is always > 14
+          LATEST_BUILD=$(app-store-connect get-latest-app-store-build-number "$BUNDLE_ID" || echo 14)
+          NEW_BUILD=$((LATEST_BUILD + 1))
+          echo "Setting build number to: $NEW_BUILD"
+          
           cd ios/App
-          agvtool new-version -all $BUILD_NUMBER
+          agvtool new-version -all $NEW_BUILD
 
       - name: Build IPA
         script: | 
@@ -73,5 +73,3 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
-        beta_groups:
-          - "Build 18"

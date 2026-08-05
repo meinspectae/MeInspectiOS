@@ -2,8 +2,8 @@ import sharp from 'sharp';
 import fs from 'fs';
 
 const WHITE = { r: 255, g: 255, b: 255, alpha: 1 };
-const ICON = 'assets/icon.png';            // symbol on white, 1024, has alpha
-const FG = 'assets/icon-foreground.png';   // symbol on transparent, 62% safe zone
+const ICON = 'assets/icon.png';            // complete logo on white, 1024
+const FG = 'assets/icon-foreground.png';   // complete logo in Android's safe zone
 
 // ---------- iOS: single 1024 icon, NO alpha channel ----------
 const iosIcon = await sharp(ICON)

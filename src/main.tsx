@@ -15,6 +15,7 @@ import { AuthProvider } from "./contexts/AuthContext.tsx";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
+import { initializeNativeOAuth } from "./utils/nativeOAuth";
 
 // Global error logging for edge cases
 window.addEventListener('error', (event) => {
@@ -32,6 +33,10 @@ window.addEventListener('unhandledrejection', (event) => {
     reason: event.reason
   });
 });
+
+// Register native OAuth deep-link handling before the app renders so both warm
+// and cold callback launches are captured.
+initializeNativeOAuth();
 
 // Register Android back button handler
 // When on the inspection wizard (/inspect), dispatch a custom event

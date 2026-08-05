@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Capacitor } from '@capacitor/core';
 import { client } from '../api/client';
 import PhoneInput from '../components/PhoneInput';
 import { getCountryNames, getCitiesForCountry } from '../data/locations';
@@ -35,6 +36,7 @@ export default function SignUpPage() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [step, setStep] = useState<'form' | 'verify-email'>('form');
+  const isNativeIOS = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
 
   const countries = getCountryNames();
   const cities = country ? getCitiesForCountry(country) : [];
@@ -169,20 +171,25 @@ export default function SignUpPage() {
                 <p className="text-sm text-slate-500">Fill in your details to get started</p>
               </div>
 
-              {/* Google Sign-In Button */}
-              <button
-                onClick={handleGoogleSignIn}
-                className="w-full flex items-center justify-center gap-3 py-3 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
-              >
-                {GOOGLE_SVG}
-                Continue with Google
-              </button>
+              {/* Google Sign-In is hidden in the iOS app until Sign in with Apple is configured. */}
+              {!isNativeIOS && (
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  className="w-full min-h-11 flex items-center justify-center gap-3 py-3 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
+                >
+                  {GOOGLE_SVG}
+                  Continue with Google
+                </button>
+              )}
 
-              <div className="relative flex items-center my-4">
-                <div className="flex-1 border-t border-slate-200" />
-                <span className="mx-3 text-xs text-slate-400 bg-slate-50 px-2">or</span>
-                <div className="flex-1 border-t border-slate-200" />
-              </div>
+              {!isNativeIOS && (
+                <div className="relative flex items-center my-4">
+                  <div className="flex-1 border-t border-slate-200" />
+                  <span className="mx-3 text-xs text-slate-400 bg-slate-50 px-2">or</span>
+                  <div className="flex-1 border-t border-slate-200" />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">Full Name *</label>

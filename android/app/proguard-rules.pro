@@ -43,6 +43,11 @@
     java.lang.Object readResolve();
 }
 
+# Google authentication / Play Services classes used by OAuth-capable builds
+-keep class com.google.android.gms.auth.api.** { *; }
+-keep class com.google.android.gms.common.** { *; }
+-keep class com.google.android.gms.tasks.** { *; }
+
 # Don't warn about missing classes from Capacitor
 -dontwarn com.getcapacitor.**
 -dontwarn org.apache.cordova.**

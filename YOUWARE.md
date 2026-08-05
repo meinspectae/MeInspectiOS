@@ -195,3 +195,21 @@ Investigation of "no welcome email on registration" + native-iOS API concerns:
 - **Pixel Fold / Tablet**: `resizeableActivity="true"` ensures proper multi-window support
 - **Sample report**: Accessible at `/sample-inspection-report.pdf`; link shown on the Login page
 - **Play Store listing guide**: `playstore-assets/PLAYSTORE-LISTING.md`
+
+
+## Native Google OAuth & Complete Brand Assets (2026-07-28)
+- Native Google sign-in now launches in a Capacitor system browser via `@capacitor/browser`, never inside the isolated app WebView.
+- The browser begins OAuth from the production web origin (`https://app.meinspect.com/mobile-auth.html`) and returns through `mobile-auth-callback.html`, which deep-links to `meinspect://auth/callback`; the app consumes the YouBase `es_auth_token` and restores the session.
+- Android registers both the `meinspect://auth/callback` custom scheme and the HTTPS app-link callback. iOS registers the `meinspect` URL scheme.
+- The YouBase Google callback is confirmed as `https://olkmxpl1sliijytnc48w.youbase.cloud/api/_es/auth/callback/google`; this is the URI that must remain authorized in Google Cloud.
+- A backend mobile OAuth bootstrap/secure-state route is included. It re-issues `better-auth.state` as `HttpOnly; Secure; SameSite=None` before navigation when deployed. The top-level browser flow remains compatible with the platform's current `SameSite=Lax` fallback.
+- The current YouBase deployment API returned internal error code `500001` after successful typecheck, build, route analysis, migration checks, storage verification, and bundle upload. The production site/native assets therefore need the normal YouWare Publish flow to go live.
+- The complete uploaded MeInspect lockup is now used for the in-app/PWA logo and all generated Android/iOS launcher assets. Regeneration scripts preserve the full lockup rather than cropping to the symbol.
+- Frontend production build and Capacitor Android/iOS sync pass. Android native compilation could not run in this environment because Java is unavailable.
+
+## App Store Review Remediation (2026-08-05)
+- Guideline 4.8: Google sign-in is no longer presented in the native iOS login or registration flows. iOS offers first-party email/password authentication only, so no third-party/social login service is used in the submitted iOS app. Google remains available on web and Android.
+- Guideline 2.1(a): The sample report control now uses an explicit native-safe handler. In native builds it opens the verified production PDF in the iOS system browser; on web it opens a new tab. The control has a 44pt-equivalent touch target and an accessible label.
+- Verified `https://app.meinspect.com/sample-inspection-report.pdf` responds successfully as `application/pdf`.
+- Release version remains 1.0 and the iOS project build number is 15, following rejected build 14.
+- Production frontend build and Capacitor iOS sync pass after the remediation.

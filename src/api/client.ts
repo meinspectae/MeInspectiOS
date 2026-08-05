@@ -3,7 +3,7 @@ import "@edgespark/client/styles.css";
 
 // Use environment variable for backend URL, with production fallback.
 // Set VITE_BACKEND_URL in .env for local development.
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://olkmxpl1sliijytnc48w.youbase.cloud";
+export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://olkmxpl1sliijytnc48w.youbase.cloud";
 
 // Single client for auth + API calls
 export const client = createEdgeSpark({ baseUrl: BACKEND_URL });
