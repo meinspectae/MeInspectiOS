@@ -13,34 +13,28 @@ workflows:
       xcode: latest
       cocoapods: default
       vars:
-        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.meinspect.app"
     scripts:
-      - name: Generate iOS project & sync Capacitor
+      - name: Build web assets and sync Capacitor
         script: | 
           npm install
           chmod -R +x node_modules/.bin || true
           
-          # Build fresh web assets first
+          # 1. Compile fresh web assets
           npm run build
 
-          # Force Capacitor to generate/sync native iOS files
+          # 2. Sync native iOS project
           npx cap add ios || true
           npx cap sync ios
 
-          # Inject Export Compliance key using plutil -replace (prevents exit code 1)
-          plutil -replace ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist || \
-          plutil -insert ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist
+          # 3. Safe plist injection (Ignores errors if key already exists)
+          plutil -replace ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist || true
+          plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || true
+          plutil -replace NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || true
 
-          # Inject location permissions cleanly
-          plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
-          plutil -insert NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
-
-          plutil -replace NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
-          plutil -insert NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
-
-          # Force the generated Xcode project file to match com.meinspect.app
+          # 4. Set bundle ID
           sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = .*/PRODUCT_BUNDLE_IDENTIFIER = com.meinspect.app;/g' ios/App/App.xcodeproj/project.pbxproj
 
       - name: Set up code signing settings on Xcode project
@@ -54,9 +48,12 @@ workflows:
 
       - name: Build IPA
         script: | 
-          xcode-project build-ipa \
-            --workspace "$XCODE_WORKSPACE" \
-            --scheme "$XCODE_SCHEME"
+          # Checks if workspace exists (CocoaPods), otherwise falls back to project file (SPM)
+          if [ -d "ios/App/App.xcworkspace" ]; then
+            xcode-project build-ipa --workspace "ios/App/App.xcworkspace" --scheme "$XCODE_SCHEME"
+          else
+            xcode-project build-ipa --project "$XCODE_PROJECT" --scheme "$XCODE_SCHEME"
+          fi
 
     artifacts:
       - build/ios/ipa/*.ipa
