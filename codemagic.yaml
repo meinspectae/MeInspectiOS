@@ -17,47 +17,40 @@ workflows:
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.meinspect.app"
     scripts:
-      - name: Install dependencies & sync Capacitor
+      - name: Generate iOS project & sync Capacitor
         script: | 
           npm install
           chmod -R +x node_modules/.bin || true
           
+          # Build fresh web assets first
+          npm run build
+
           # Force Capacitor to generate/sync native iOS files
           npx cap add ios || true
           npx cap sync ios
 
-          # Inject Export Compliance key (Fixes 422 TestFlight submission error)
-          plutil -insert ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist || \
-          plutil -replace ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist
+          # Inject Export Compliance key using plutil -replace (prevents exit code 1)
+          plutil -replace ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist || \
+          plutil -insert ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist
 
-          # Inject required iOS location permission keys into Info.plist
-          plutil -insert NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
-          plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
+          # Inject location permissions cleanly
+          plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
+          plutil -insert NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
 
-          plutil -insert NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
-          plutil -replace NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
+          plutil -replace NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || \
+          plutil -insert NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist
 
           # Force the generated Xcode project file to match com.meinspect.app
           sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = .*/PRODUCT_BUNDLE_IDENTIFIER = com.meinspect.app;/g' ios/App/App.xcodeproj/project.pbxproj
-          
-          # Install CocoaPods dependencies for Capacitor plugins
-          cd ios/App
-          pod install
 
       - name: Set up code signing settings on Xcode project
         script: | 
           xcode-project use-profiles
 
-      - name: Increment build number automatically
+      - name: Increment build number
         script: | 
-          # Fetches latest build number from App Store Connect and increments it (+1)
-          # Ensures build is always > 14
-          LATEST_BUILD=$(app-store-connect get-latest-app-store-build-number "$BUNDLE_ID" || echo 14)
-          NEW_BUILD=$((LATEST_BUILD + 1))
-          echo "Setting build number to: $NEW_BUILD"
-          
           cd ios/App
-          agvtool new-version -all $NEW_BUILD
+          agvtool new-version -all $BUILD_NUMBER
 
       - name: Build IPA
         script: | 
