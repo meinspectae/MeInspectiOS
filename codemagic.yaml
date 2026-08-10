@@ -29,15 +29,12 @@ workflows:
           npx cap add ios || true
           npx cap sync ios
 
-          # 3. Install CocoaPods dependencies for Capacitor plugins
-          cd ios/App && pod install && cd ../..
-
-          # 4. Safe plist injection
+          # 3. Safe plist injection (Ignores errors if key already exists)
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO ios/App/App/Info.plist || true
           plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || true
           plutil -replace NSLocationWhenInUseUsageDescription -string "MeInspect requires access to your location to attach location coordinates to property inspection reports." ios/App/App/Info.plist || true
 
-          # 5. Set bundle ID
+          # 4. Set bundle ID
           sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = .*/PRODUCT_BUNDLE_IDENTIFIER = com.meinspect.app;/g' ios/App/App.xcodeproj/project.pbxproj
 
       - name: Set up code signing settings on Xcode project
