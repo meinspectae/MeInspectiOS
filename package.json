@@ -29,6 +29,7 @@
     "@capacitor/status-bar": "^8.0.2",
     "@edgespark/client": "^1.0.4",
     "@headlessui/react": "^1.7.18",
+    "@revenuecat/purchases-capacitor": "^13.4.0",
     "clsx": "^2.1.0",
     "framer-motion": "^11.0.8",
     "html2pdf.js": "^0.14.0",

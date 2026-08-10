@@ -1,10 +1,11 @@
 import { Hono } from "hono";
-import { db, secret, storage } from "edgespark";
-import { auth } from "edgespark/http";
-import * as tables from "./__generated__/db_schema";
-import { buckets } from "./defs/index";
+import type { Client } from "@sdk/server-types";
+import { tables, buckets, drizzleSchema } from "@generated";
 import { eq, and } from "drizzle-orm";
 import Stripe from "stripe";
+
+// Re-export the required EdgeSpark bundle contract (tables/buckets/drizzleSchema).
+export { tables, buckets, drizzleSchema };
 
 function getEnv(): "staging" | "production" {
   // ENVIRONMENT is bound via wrangler.toml [vars]
@@ -19,27 +20,34 @@ function tryParse(json: string | null | undefined): any {
 }
 
 /**
- * Verify that the authenticated user owns the given inspection.
- * Returns the inspection row if authorized, or sends an error response and returns null.
+ * EdgeSpark entry point. All db/auth/secret/storage access happens exclusively
+ * through the injected `edgespark` client — never via direct "edgespark"/"edgespark/http" imports.
  */
-async function requireOwnership(
-  userId: string,
-  inspectionId: string
-): Promise<any | null> {
-  const rows = await db
-    .select()
-    .from(tables.inspections)
-    .where(
-      and(
-        eq(tables.inspections.id, inspectionId),
-        eq(tables.inspections.userId, userId)
-      )
-    );
-  if (rows.length === 0) return null;
-  return rows[0];
-}
+export async function createApp(edgespark: Client<typeof tables>): Promise<Hono> {
+  const { db, secret, storage, auth } = edgespark;
 
-const app = new Hono();
+  /**
+   * Verify that the authenticated user owns the given inspection.
+   * Returns the inspection row if authorized, or null otherwise.
+   */
+  async function requireOwnership(
+    userId: string,
+    inspectionId: string
+  ): Promise<any | null> {
+    const rows = await db
+      .select()
+      .from(tables.inspections)
+      .where(
+        and(
+          eq(tables.inspections.id, inspectionId),
+          eq(tables.inspections.userId, userId)
+        )
+      );
+    if (rows.length === 0) return null;
+    return rows[0];
+  }
+
+  const app = new Hono();
 
   // Global error handler
   app.onError((err, c) => {
@@ -679,7 +687,7 @@ const app = new Hono();
       // Mark inspection as paid immediately
       if (inspectionId) {
         await db.update(tables.inspections)
-          .set({ payment: JSON.stringify({ paid: true, sessionId, provider: 'admin_credit' }) })
+          .set({ paymentData: JSON.stringify({ paid: true, sessionId, provider: 'admin_credit' }) })
           .where(eq(tables.inspections.id, inspectionId));
       }
 
@@ -909,10 +917,10 @@ const app = new Hono();
             .where(eq(tables.inspections.id, reportId));
             
           if (inspectionRows.length > 0) {
-            const currentData = tryParse(inspectionRows[0].payment as string);
+            const currentData = tryParse(inspectionRows[0].paymentData as string);
             await db.update(tables.inspections)
               .set({
-                payment: JSON.stringify({ ...currentData, paid: true, sessionId: session.id })
+                paymentData: JSON.stringify({ ...currentData, paid: true, sessionId: session.id })
               })
               .where(eq(tables.inspections.id, reportId));
             
@@ -977,6 +985,114 @@ const app = new Hono();
       console.error('[WEBHOOK] error:', err.message);
       return c.json({ error: `Webhook Error: ${err.message}` }, 400);
     }
+  });
+
+  // ==================== REVENUECAT WEBHOOK (iOS IAP) ====================
+  // Security-critical: this is the ONLY place in the entire codebase that may
+  // unlock report access for the com.meinspect.app.report in-app purchase.
+  // The client's purchase success callback is NEVER trusted on its own — it
+  // only shows a "confirming" state and polls GET /api/inspections/:id until
+  // this webhook (verified below) has flipped paymentData.paid to true.
+  //
+  // Correlation model: the iOS client calls Purchases.logIn(inspectionId)
+  // before showing the purchase button, so RevenueCat's app_user_id for this
+  // purchase IS the inspection's id — mirroring the existing Stripe flow,
+  // where metadata.inspectionId ties a checkout session to one report.
+  app.post('/api/webhooks/revenuecat', async (c) => {
+    // ---- Fail-closed secret verification. No fallback value, ever. ----
+    const expectedSecret = secret.get('REVENUECAT_WEBHOOK_SECRET');
+    if (!expectedSecret) {
+      console.error('[REVENUECAT_WEBHOOK] REVENUECAT_WEBHOOK_SECRET not configured — rejecting all requests');
+      return c.json({ error: 'Webhook not configured' }, 500);
+    }
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader || authHeader !== `Bearer ${expectedSecret}`) {
+      console.warn('[REVENUECAT_WEBHOOK] Unauthorized request — missing/invalid Authorization header');
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    // ---- Parse RevenueCat event payload ----
+    let body: any;
+    try {
+      body = await c.req.json();
+    } catch (err) {
+      console.error('[REVENUECAT_WEBHOOK] Invalid JSON body:', err);
+      return c.json({ error: 'Invalid JSON body' }, 400);
+    }
+
+    const event = body?.event;
+    if (!event || typeof event !== 'object') {
+      console.warn('[REVENUECAT_WEBHOOK] Missing event object in payload');
+      return c.json({ error: 'Missing event' }, 400);
+    }
+
+    const eventType: string = event.type;
+    const productId: string = event.product_id;
+    // The client sets RevenueCat's appUserID = inspectionId via Purchases.logIn()
+    // before purchasing, so app_user_id IS the report's inspection id.
+    const inspectionId: string | undefined = event.app_user_id;
+    const transactionId: string | undefined = event.transaction_id || event.original_transaction_id;
+    const eventId: string | undefined = event.id;
+
+    console.log(`[REVENUECAT_WEBHOOK] Received event: type=${eventType} product=${productId} app_user_id=${inspectionId} event_id=${eventId}`);
+
+    const REPORT_PRODUCT_ID = 'com.meinspect.app.report';
+    if (productId !== REPORT_PRODUCT_ID) {
+      // Not our product — acknowledge without action (forward-compatible with
+      // any other products configured in RevenueCat in the future).
+      console.log(`[REVENUECAT_WEBHOOK] Ignoring event for unrelated product: ${productId}`);
+      return c.json({ received: true });
+    }
+
+    if (!inspectionId) {
+      console.warn('[REVENUECAT_WEBHOOK] Event missing app_user_id — cannot resolve inspection, ignoring');
+      return c.json({ received: true });
+    }
+
+    const inspectionRows = await db.select().from(tables.inspections)
+      .where(eq(tables.inspections.id, inspectionId));
+
+    if (inspectionRows.length === 0) {
+      console.warn(`[REVENUECAT_WEBHOOK] No inspection found for app_user_id=${inspectionId} — ignoring`);
+      return c.json({ received: true });
+    }
+
+    const currentData = tryParse(inspectionRows[0].paymentData as string);
+
+    if (eventType === 'INITIAL_PURCHASE') {
+      await db.update(tables.inspections)
+        .set({
+          paymentData: JSON.stringify({
+            ...currentData,
+            paid: true,
+            provider: 'revenuecat',
+            productId,
+            transactionId,
+            paidAt: Math.floor(Date.now() / 1000),
+          }),
+        })
+        .where(eq(tables.inspections.id, inspectionId));
+      console.log(`[REVENUECAT_WEBHOOK] Unlocked report ${inspectionId} via verified RevenueCat INITIAL_PURCHASE (transaction ${transactionId})`);
+    } else if (eventType === 'CANCELLATION' || eventType === 'REFUND') {
+      await db.update(tables.inspections)
+        .set({
+          paymentData: JSON.stringify({
+            ...currentData,
+            paid: false,
+            provider: 'revenuecat',
+            productId,
+            transactionId,
+            revokedAt: Math.floor(Date.now() / 1000),
+            revokedReason: eventType,
+          }),
+        })
+        .where(eq(tables.inspections.id, inspectionId));
+      console.warn(`[REVENUECAT_WEBHOOK] Revoked report ${inspectionId} access due to ${eventType} (transaction ${transactionId})`);
+    } else {
+      console.log(`[REVENUECAT_WEBHOOK] No action taken for event type: ${eventType}`);
+    }
+
+    return c.json({ received: true });
   });
 
   // Get user's payment history
@@ -1462,4 +1578,5 @@ const app = new Hono();
     return c.json({ success: result.ok, error: result.error });
   });
 
-export default app;
+  return app;
+}

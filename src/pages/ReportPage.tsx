@@ -10,6 +10,12 @@ import { client } from '../api/client';
 import PaymentModal from '../components/PaymentModal';
 import EmailReportModal from '../components/EmailReportModal';
 import {
+  identifyReport,
+  hasPurchasedReport,
+  purchaseReport,
+  isRevenueCatPlatform,
+} from '../utils/revenuecat';
+import {
   formatDate,
   formatDateTime,
   generateReportHash,
@@ -113,6 +119,13 @@ export default function ReportPage() {
   const [reportScale, setReportScale] = useState(1);
   const [reportHeight, setReportHeight] = useState<number | null>(null);
 
+  // iOS native in-app purchase state (RevenueCat). Web/Android are untouched
+  // and continue to use the Stripe PaymentModal flow below.
+  const isIOSNative = Capacitor.getPlatform() === 'ios';
+  const [iapState, setIapState] = useState<'idle' | 'checking' | 'purchasing' | 'confirming' | 'error'>('idle');
+  const [iapError, setIapError] = useState('');
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const { user } = useAuthStore();
   const inspection = id ? getInspection(id) : useInspectionStore.getState().currentInspection;
   const [isPaid, setIsPaid] = useState(inspection?.payment?.paid || false);
@@ -160,6 +173,121 @@ export default function ReportPage() {
     };
     checkBackendPayment();
   }, [inspection?.id]);
+
+  // --- iOS RevenueCat purchase confirmation polling ---
+  // The backend webhook (/api/webhooks/revenuecat) is the ONLY thing that ever
+  // flips paymentData.paid for an in-app purchase. This helper repeatedly asks
+  // the backend for the authoritative status; it never unlocks anything itself.
+  const pollBackendForUnlock = useCallback((maxAttempts = 20, intervalMs = 3000) => {
+    if (!inspection?.id) return;
+    let attempts = 0;
+    const tick = async () => {
+      attempts += 1;
+      try {
+        const res = await client.api.fetch(`/api/inspections/${inspection.id}`);
+        if (res.ok) {
+          const { data } = await res.json();
+          let paymentStatus: any = {};
+          if (data.paymentData && typeof data.paymentData === 'string') {
+            try { paymentStatus = JSON.parse(data.paymentData); } catch {}
+          } else if (data.payment && typeof data.payment === 'object') {
+            paymentStatus = data.payment;
+          }
+          if (paymentStatus?.paid === true) {
+            setIsPaid(true);
+            setIapState('idle');
+            setIapError('');
+            const { recordPayment } = useInspectionStore.getState();
+            recordPayment(inspection.id, {
+              paid: true,
+              amount: paymentStatus.amount || 0,
+              currency: paymentStatus.currency || 'AED',
+              method: 'apple_pay',
+              paidAt: paymentStatus.paidAt,
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('[ReportPage] Backend unlock poll failed:', e);
+      }
+      if (attempts < maxAttempts) {
+        pollTimerRef.current = setTimeout(tick, intervalMs);
+      } else {
+        // Never fail silently — give the user a clear, retry-able state.
+        setIapState('error');
+        setIapError('Still confirming your purchase with Apple. This can take a moment — please try again shortly.');
+      }
+    };
+    tick();
+  }, [inspection?.id]);
+
+  // Clean up any pending poll timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
+
+  // On iOS, identify this report to RevenueCat (appUserID = inspectionId) and
+  // check whether it was already purchased before showing a purchase button —
+  // this alone never unlocks the report, it just avoids a redundant charge.
+  useEffect(() => {
+    if (!isIOSNative || !inspection?.id || isPaid) return;
+    let cancelled = false;
+    (async () => {
+      setIapState('checking');
+      try {
+        await identifyReport(inspection.id);
+        const alreadyPurchased = await hasPurchasedReport();
+        if (cancelled) return;
+        if (alreadyPurchased) {
+          // RevenueCat already has a transaction for this report — wait for
+          // the backend webhook to confirm and unlock (never trust the client).
+          setIapState('confirming');
+          pollBackendForUnlock();
+        } else {
+          setIapState('idle');
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error('[ReportPage] RevenueCat identify/check failed:', err);
+        setIapState('idle');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isIOSNative, inspection?.id, isPaid, pollBackendForUnlock]);
+
+  const handleNativePurchase = useCallback(async () => {
+    setIapState('purchasing');
+    setIapError('');
+    const outcome = await purchaseReport();
+    if (outcome.status === 'success') {
+      // Purchase accepted by Apple/RevenueCat — but the client NEVER unlocks
+      // the report itself. Show a confirming state and wait for the verified
+      // backend webhook to flip paymentData.paid.
+      setIapState('confirming');
+      pollBackendForUnlock();
+    } else if (outcome.status === 'cancelled') {
+      setIapState('error');
+      setIapError('Purchase was cancelled.');
+    } else {
+      setIapState('error');
+      setIapError(outcome.message);
+    }
+  }, [pollBackendForUnlock]);
+
+  // Unified "unlock" entry point used by every CTA below. iOS uses the native
+  // RevenueCat purchase flow; web/Android keep the existing Stripe flow
+  // completely unchanged.
+  const handleUnlockClick = useCallback(() => {
+    if (isIOSNative) {
+      if (iapState === 'purchasing' || iapState === 'confirming') return;
+      handleNativePurchase();
+    } else {
+      setShowPaymentModal(true);
+    }
+  }, [isIOSNative, iapState, handleNativePurchase]);
 
   // Handle payment redirect success
   useEffect(() => {
@@ -412,7 +540,7 @@ export default function ReportPage() {
 
   const handleDownloadClick = () => {
     if (!isPaid) {
-      setShowPaymentModal(true);
+      handleUnlockClick();
       return;
     }
     generatePDF();
@@ -589,7 +717,7 @@ export default function ReportPage() {
 
   const handlePrint = () => {
     if (!isPaid) {
-      setShowPaymentModal(true);
+      handleUnlockClick();
       return;
     }
     const isNative = Capacitor.isNativePlatform();
@@ -686,18 +814,18 @@ export default function ReportPage() {
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                {isPaid ? 'Download PDF' : 'Pay to Download'}
+                {isPaid ? 'Download PDF' : (isIOSNative ? 'Unlock to Download' : 'Pay to Download')}
               </>
             )}
           </button>
           <button
-            onClick={() => isPaid ? setShowEmailModal(true) : setShowPaymentModal(true)}
+            onClick={() => isPaid ? setShowEmailModal(true) : handleUnlockClick()}
             className="px-3 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl text-xs sm:text-sm font-semibold hover:from-blue-700 hover:to-indigo-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-500/25"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
-            {isPaid ? 'Email Report' : 'Pay to Email'}
+            {isPaid ? 'Email Report' : (isIOSNative ? 'Unlock to Email' : 'Pay to Email')}
           </button>
           <button
             onClick={handlePrint}
@@ -718,14 +846,34 @@ export default function ReportPage() {
           </div>
           <div className="flex-1 text-center sm:text-left">
             <h3 className="text-lg font-bold text-blue-900">Report Locked</h3>
-            <p className="text-sm text-blue-700">Complete your payment to download the full professional PDF report and email it to all parties.</p>
+            <p className="text-sm text-blue-700">
+              {isIOSNative
+                ? 'Complete your in-app purchase to download the full professional PDF report and email it to all parties.'
+                : 'Complete your payment to download the full professional PDF report and email it to all parties.'}
+            </p>
+            {isIOSNative && iapState === 'error' && iapError && (
+              <p className="text-sm text-red-600 font-medium mt-2">{iapError}</p>
+            )}
           </div>
-          <button
-            onClick={() => setShowPaymentModal(true)}
-            className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/25 whitespace-nowrap"
-          >
-            Pay AED {REPORT_PRICE}
-          </button>
+          {isIOSNative ? (
+            <button
+              onClick={handleUnlockClick}
+              disabled={iapState === 'purchasing' || iapState === 'confirming' || iapState === 'checking'}
+              className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/25 whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {iapState === 'checking' && 'Checking...'}
+              {iapState === 'purchasing' && 'Processing...'}
+              {iapState === 'confirming' && 'Confirming purchase...'}
+              {(iapState === 'idle' || iapState === 'error') && (iapError ? 'Try Again' : 'Unlock Report')}
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowPaymentModal(true)}
+              className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/25 whitespace-nowrap"
+            >
+              Pay AED {REPORT_PRICE}
+            </button>
+          )}
         </div>
       )}
 

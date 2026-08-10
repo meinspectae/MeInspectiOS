@@ -207,6 +207,20 @@ Investigation of "no welcome email on registration" + native-iOS API concerns:
 - The complete uploaded MeInspect lockup is now used for the in-app/PWA logo and all generated Android/iOS launcher assets. Regeneration scripts preserve the full lockup rather than cropping to the symbol.
 - Frontend production build and Capacitor Android/iOS sync pass. Android native compilation could not run in this environment because Java is unavailable.
 
+## Backend Entry Point Contract (2026-08-10)
+- `backend/src/index.ts` now uses the mandatory EdgeSpark contract: `export async function createApp(edgespark) { const app = new Hono(); ...; return app; }`. All `db`/`auth`/`secret`/`storage` access goes exclusively through the injected `edgespark` client (destructured once at the top of `createApp`). Never import from `"edgespark"`/`"edgespark/http"` and never `export default app` — doing so breaks `edgespark deploy` with error 500001.
+- Schema/types are imported only from `@generated` (`tables`, `buckets`, `drizzleSchema`) and `@sdk/server-types` (`Client` type). These aliases are resolved by the pinned `@edgespark/cli` bundler itself (esbuild `alias` config), and mirrored in `backend/tsconfig.json` (`paths`) for local type-checking.
+- `backend/src/defs/storage_schema.ts` and `backend/src/types.ts` are legacy/unused (excluded in `backend/tsconfig.json`) — the app now sources bucket/table defs from `@generated` only.
+- Verify before considering backend work "done": `cd backend && npx edgespark deploy --dry-run` must print the Route Summary with no errors.
+
+## RevenueCat IAP for iOS Report Unlock (2026-08-10)
+- iOS uses a native in-app purchase (`com.meinspect.app.report`, RevenueCat) to unlock a single inspection report; web/Android are unchanged and still use Stripe (`PaymentModal`).
+- **Correlation model**: before showing the purchase button, the client calls `Purchases.logIn(inspectionId)` (see `src/utils/revenuecat.ts` `identifyReport()`), so RevenueCat's `app_user_id` for that purchase IS the report's `inspectionId` — mirroring the existing Stripe `metadata.inspectionId` pattern. This lets the webhook resolve exactly which report to unlock with zero extra state.
+- **Trust model**: the client's purchase success callback never unlocks anything by itself. `ReportPage.tsx` shows a "confirming" state and polls `GET /api/inspections/:id` until the backend's `paymentData.paid` flips to `true`. The **only** code path that sets `paid: true`/`false` for this product is the verified webhook `POST /api/webhooks/revenuecat` in `backend/src/index.ts` (checks `Authorization: Bearer <REVENUECAT_WEBHOOK_SECRET>` with no fallback — fails closed if the secret isn't configured). `INITIAL_PURCHASE` grants access; `CANCELLATION`/`REFUND` revoke it.
+- `REVENUECAT_WEBHOOK_SECRET` must be configured as a backend secret (RevenueCat dashboard → webhook → same secret as the `Authorization: Bearer` value).
+- Native setup: `@revenuecat/purchases-capacitor` added to `package.json`; `npx cap sync ios` regenerates `ios/App/CapApp-SPM/Package.swift` with the `RevenuecatPurchasesCapacitor` SPM dependency (project uses SPM, not CocoaPods — no `Podfile`). `initRevenueCat()` runs on app startup in `src/main.tsx`, iOS-only (`Capacitor.getPlatform() === 'ios'`).
+- Android/keystore/report-rendering code were not touched by this feature.
+
 ## App Store Review Remediation (2026-08-05)
 - Guideline 4.8: Google sign-in is no longer presented in the native iOS login or registration flows. iOS offers first-party email/password authentication only, so no third-party/social login service is used in the submitted iOS app. Google remains available on web and Android.
 - Guideline 2.1(a): The sample report control now uses an explicit native-safe handler. In native builds it opens the verified production PDF in the iOS system browser; on web it opens a new tab. The control has a 44pt-equivalent touch target and an accessible label.

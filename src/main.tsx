@@ -16,6 +16,7 @@ import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { initializeNativeOAuth } from "./utils/nativeOAuth";
+import { initRevenueCat } from "./utils/revenuecat";
 
 // Global error logging for edge cases
 window.addEventListener('error', (event) => {
@@ -37,6 +38,11 @@ window.addEventListener('unhandledrejection', (event) => {
 // Register native OAuth deep-link handling before the app renders so both warm
 // and cold callback launches are captured.
 initializeNativeOAuth();
+
+// Initialize RevenueCat for in-app purchases — iOS only, no-op on web/Android.
+if (Capacitor.getPlatform() === 'ios') {
+  initRevenueCat();
+}
 
 // Register Android back button handler
 // When on the inspection wizard (/inspect), dispatch a custom event
