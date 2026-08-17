@@ -1,11 +1,18 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Capacitor } from '@capacitor/core';
 import { useInspectionStore } from '../store/inspectionStore';
 import { getPropertyTypeLabel } from '../data/propertyTemplates';
 import { capturePhoto, safeGoBack } from '../utils/helpers';
+import { client } from '../api/client';
 import SignaturePad from '../components/SignaturePad';
 import PhoneInput from '../components/PhoneInput';
 import PaymentModal from '../components/PaymentModal';
+import {
+  identifyReport,
+  hasPurchasedReport,
+  purchaseReport,
+} from '../utils/revenuecat';
 import type { ConditionRating, Photo, Room, InspectionItem } from '../types';
 
 const conditionOptions: { value: ConditionRating; label: string; color: string; activeColor: string }[] = [
@@ -62,6 +69,16 @@ export default function InspectionForm() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentCompleted, setPaymentCompleted] = useState(currentInspection?.payment?.paid || false);
 
+  // iOS native in-app purchase state (RevenueCat). Web/Android are untouched
+  // and continue to use the Stripe PaymentModal flow below. This mirrors the
+  // exact same platform-gated pattern used in ReportPage.tsx so the report
+  // unlock triggered from this wizard's "Payment" step can never fall through
+  // to Stripe on iOS (Guideline 3.1.1).
+  const isIOSNative = Capacitor.getPlatform() === 'ios';
+  const [iapState, setIapState] = useState<'idle' | 'checking' | 'purchasing' | 'confirming' | 'error'>('idle');
+  const [iapError, setIapError] = useState('');
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Build steps dynamically: Property → Parties → Tenancy → Room1..RoomN → Keys & Utility → Signatures → Review
   // NOTE: All hooks MUST be declared before any early returns (React Rules of Hooks)
   const roomSteps = useMemo(() => (currentInspection?.rooms ?? []).map((r: any, i: number) => ({
@@ -86,6 +103,119 @@ export default function InspectionForm() {
   const isRoomStep = typeof currentStepKey === 'string' && currentStepKey.startsWith('room_');
   const currentRoomIdx = isRoomStep ? parseInt(currentStepKey.split('_')[1]) : -1;
 
+  // --- iOS RevenueCat purchase confirmation polling ---
+  // Same trust model as ReportPage.tsx: the backend webhook
+  // (/api/webhooks/revenuecat) is the ONLY thing that ever flips
+  // paymentData.paid for an in-app purchase. This never unlocks the report
+  // itself — it just asks the backend for the authoritative status.
+  const pollBackendForUnlock = useCallback((maxAttempts = 20, intervalMs = 3000) => {
+    if (!currentInspection?.id) return;
+    let attempts = 0;
+    const tick = async () => {
+      attempts += 1;
+      try {
+        const res = await client.api.fetch(`/api/inspections/${currentInspection.id}`);
+        if (res.ok) {
+          const { data } = await res.json();
+          let paymentStatus: any = {};
+          if (data.paymentData && typeof data.paymentData === 'string') {
+            try { paymentStatus = JSON.parse(data.paymentData); } catch {}
+          } else if (data.payment && typeof data.payment === 'object') {
+            paymentStatus = data.payment;
+          }
+          if (paymentStatus?.paid === true) {
+            const { recordPayment } = useInspectionStore.getState();
+            recordPayment(currentInspection.id, {
+              paid: true,
+              amount: paymentStatus.amount || REPORT_PRICE,
+              currency: paymentStatus.currency || 'AED',
+              method: 'apple_pay',
+              paidAt: paymentStatus.paidAt,
+            });
+            setPaymentCompleted(true);
+            setIapState('idle');
+            setIapError('');
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('[InspectionForm] Backend unlock poll failed:', e);
+      }
+      if (attempts < maxAttempts) {
+        pollTimerRef.current = setTimeout(tick, intervalMs);
+      } else {
+        setIapState('error');
+        setIapError('Still confirming your purchase with Apple. This can take a moment — please try again shortly.');
+      }
+    };
+    tick();
+  }, [currentInspection?.id]);
+
+  // Clean up any pending poll timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
+
+  // On iOS, identify this report to RevenueCat (appUserID = inspectionId) and
+  // check whether it was already purchased before showing a purchase button —
+  // this alone never unlocks the report, it just avoids a redundant charge.
+  useEffect(() => {
+    if (!isIOSNative || !currentInspection?.id || paymentCompleted || currentInspection?.payment?.paid) return;
+    let cancelled = false;
+    (async () => {
+      setIapState('checking');
+      try {
+        await identifyReport(currentInspection.id);
+        const alreadyPurchased = await hasPurchasedReport();
+        if (cancelled) return;
+        if (alreadyPurchased) {
+          setIapState('confirming');
+          pollBackendForUnlock();
+        } else {
+          setIapState('idle');
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error('[InspectionForm] RevenueCat identify/check failed:', err);
+        setIapState('idle');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isIOSNative, currentInspection?.id, paymentCompleted, currentInspection?.payment?.paid, pollBackendForUnlock]);
+
+  const handleNativePurchase = useCallback(async () => {
+    setIapState('purchasing');
+    setIapError('');
+    const outcome = await purchaseReport();
+    if (outcome.status === 'success') {
+      // Purchase accepted by Apple/RevenueCat — but the client NEVER unlocks
+      // the report itself. Show a confirming state and wait for the verified
+      // backend webhook to flip paymentData.paid.
+      setIapState('confirming');
+      pollBackendForUnlock();
+    } else if (outcome.status === 'cancelled') {
+      setIapState('error');
+      setIapError('Purchase was cancelled.');
+    } else {
+      setIapState('error');
+      setIapError(outcome.message);
+    }
+  }, [pollBackendForUnlock]);
+
+  // Unified "unlock" entry point used by the Payment step below. iOS uses
+  // the native RevenueCat purchase flow; Android/web keep the existing
+  // Stripe flow completely unchanged.
+  const handleUnlockClick = useCallback(() => {
+    if (isIOSNative) {
+      if (iapState === 'purchasing' || iapState === 'confirming') return;
+      handleNativePurchase();
+    } else {
+      setShowPaymentModal(true);
+    }
+  }, [isIOSNative, iapState, handleNativePurchase]);
+
   // Validation for each step
   const isPropertyValid = useCallback((): boolean => {
     const p = currentInspection.property;
@@ -97,14 +227,18 @@ export default function InspectionForm() {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }, []);
 
+  // Phone number is NOT required on iOS (Apple Guideline 5.1.1(v) — it is
+  // not essential to the app's core functionality: report generation works
+  // fine with a blank phone field, it just prints as blank on the PDF).
+  // Android/web keep the existing required-phone behavior unchanged.
   const isPartiesValid = useCallback((): boolean => {
     const t = currentInspection.tenant;
     const l = currentInspection.landlord;
     return !!(
-      t.name && t.phone && isEmailValid(t.email) &&
-      l.name && l.phone && isEmailValid(l.email)
+      t.name && (isIOSNative || t.phone) && isEmailValid(t.email) &&
+      l.name && (isIOSNative || l.phone) && isEmailValid(l.email)
     );
-  }, [currentInspection.tenant, currentInspection.landlord, isEmailValid]);
+  }, [currentInspection.tenant, currentInspection.landlord, isEmailValid, isIOSNative]);
 
   const isTenancyValid = useCallback((): boolean => {
     const tn = currentInspection.tenancy;
@@ -129,7 +263,7 @@ export default function InspectionForm() {
 
   const getValidationError = useCallback((): string | null => {
     if (currentStepKey === 'property') return isPropertyValid() ? null : 'Makani Number, Area, and City are required';
-    if (currentStepKey === 'parties') return isPartiesValid() ? null : 'Landlord and Tenant name, phone, and email are required';
+    if (currentStepKey === 'parties') return isPartiesValid() ? null : (isIOSNative ? 'Landlord and Tenant name and email are required' : 'Landlord and Tenant name, phone, and email are required');
     if (currentStepKey === 'tenancy') return isTenancyValid() ? null : 'Lease Start, End, and Contract Number are required';
     if (isRoomStep && !isRoomValid(currentRoomIdx)) {
       const room = currentInspection.rooms[currentRoomIdx];
@@ -147,7 +281,7 @@ export default function InspectionForm() {
     if (currentStepKey === 'signatures') return allSignaturesCollected ? null : 'All three signatures are required';
     if (currentStepKey === 'payment') return paymentCompleted ? null : 'Payment is required to generate the report';
     return null;
-  }, [currentStepKey, isPropertyValid, isPartiesValid, isTenancyValid, isRoomStep, currentRoomIdx, currentInspection.rooms, allSignaturesCollected, paymentCompleted]);
+  }, [currentStepKey, isPropertyValid, isPartiesValid, isTenancyValid, isRoomStep, currentRoomIdx, currentInspection.rooms, allSignaturesCollected, paymentCompleted, isIOSNative]);
 
   const canProceed = useCallback((): boolean => getValidationError() === null, [getValidationError]);
 
@@ -327,6 +461,7 @@ export default function InspectionForm() {
             onUpdateTenant={updateTenant}
             onUpdateLandlord={updateLandlord}
             onUpdateAgent={updateAgent}
+            isIOSNative={isIOSNative}
           />
         )}
         {currentStepKey === 'tenancy' && (
@@ -374,7 +509,10 @@ export default function InspectionForm() {
             inspection={currentInspection}
             reportPrice={REPORT_PRICE}
             paymentCompleted={paymentCompleted}
-            onOpenPayment={() => setShowPaymentModal(true)}
+            onOpenPayment={handleUnlockClick}
+            isIOSNative={isIOSNative}
+            iapState={iapState}
+            iapError={iapError}
           />
         )}
         {currentStepKey === 'review' && (
@@ -503,10 +641,11 @@ const PropertyStep = React.memo(function PropertyStep({ property, onUpdate }: { 
 // Parties Step
 const PartiesStep = React.memo(function PartiesStep({
   tenant, landlord, agent,
-  onUpdateTenant, onUpdateLandlord, onUpdateAgent
+  onUpdateTenant, onUpdateLandlord, onUpdateAgent, isIOSNative,
 }: {
   tenant: any; landlord: any; agent: any;
   onUpdateTenant: (t: any) => void; onUpdateLandlord: (l: any) => void; onUpdateAgent: (a: any) => void;
+  isIOSNative: boolean;
 }) {
   const [showAgent, setShowAgent] = useState(!!agent?.name);
 
@@ -525,7 +664,7 @@ const PartiesStep = React.memo(function PartiesStep({
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <InputField label="Full Name *" value={landlord.name} onChange={(v) => onUpdateLandlord({ name: v })} placeholder="Landlord name" />
-          <PhoneInput label="Phone *" value={landlord.phone} onChange={(v) => onUpdateLandlord({ phone: v })} />
+          <PhoneInput label={isIOSNative ? 'Phone' : 'Phone *'} value={landlord.phone} onChange={(v) => onUpdateLandlord({ phone: v })} />
           <InputField label="Email *" value={landlord.email} onChange={(v) => onUpdateLandlord({ email: v })} placeholder="email@example.com" />
         </div>
       </div>
@@ -538,7 +677,7 @@ const PartiesStep = React.memo(function PartiesStep({
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <InputField label="Full Name *" value={tenant.name} onChange={(v) => onUpdateTenant({ name: v })} placeholder="Tenant name" />
-          <PhoneInput label="Phone *" value={tenant.phone} onChange={(v) => onUpdateTenant({ phone: v })} />
+          <PhoneInput label={isIOSNative ? 'Phone' : 'Phone *'} value={tenant.phone} onChange={(v) => onUpdateTenant({ phone: v })} />
           <InputField label="Email *" value={tenant.email} onChange={(v) => onUpdateTenant({ email: v })} placeholder="email@example.com" />
         </div>
       </div>
@@ -752,10 +891,13 @@ const SingleRoomStep = React.memo(function SingleRoomStep({
 
 // Payment Step
 const PaymentStep = React.memo(function PaymentStep({
-  inspection, reportPrice, paymentCompleted, onOpenPayment,
+  inspection, reportPrice, paymentCompleted, onOpenPayment, isIOSNative, iapState, iapError,
 }: {
   inspection: any; reportPrice: number; paymentCompleted: boolean;
   onOpenPayment: () => void;
+  isIOSNative: boolean;
+  iapState: 'idle' | 'checking' | 'purchasing' | 'confirming' | 'error';
+  iapError: string;
 }) {
   const paid = inspection.payment?.paid || paymentCompleted;
   return (
@@ -812,6 +954,25 @@ const PaymentStep = React.memo(function PaymentStep({
               <p className="text-xs text-emerald-600">You can now generate your report</p>
             </div>
           </div>
+        ) : isIOSNative ? (
+          <>
+            {iapState === 'error' && iapError && (
+              <p className="text-sm text-red-600 font-medium mb-2">{iapError}</p>
+            )}
+            <button
+              onClick={onOpenPayment}
+              disabled={iapState === 'purchasing' || iapState === 'confirming' || iapState === 'checking'}
+              className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold text-sm hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+              </svg>
+              {iapState === 'checking' && 'Checking...'}
+              {iapState === 'purchasing' && 'Processing...'}
+              {iapState === 'confirming' && 'Confirming purchase...'}
+              {(iapState === 'idle' || iapState === 'error') && (iapError ? 'Try Again' : `Unlock Report (AED ${reportPrice})`)}
+            </button>
+          </>
         ) : (
           <button onClick={onOpenPayment}
             className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold text-sm hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] flex items-center justify-center gap-2">

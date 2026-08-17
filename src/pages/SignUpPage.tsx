@@ -76,8 +76,12 @@ export default function SignUpPage() {
   const validateForm = (): boolean => {
     const e: Record<string, string> = {};
     if (!name.trim()) e.name = 'Required';
-    if (!phone.trim()) e.phone = 'Required';
-    else if (phone.replace(/[^0-9]/g, '').length < 9) e.phone = 'Enter a valid phone number';
+    // Phone number is NOT required on iOS (Apple Guideline 5.1.1(v) — it is
+    // not essential to the app's core functionality). Android/web keep the
+    // existing required-phone behavior unchanged. When provided, it is still
+    // validated for basic sanity on all platforms.
+    if (!isNativeIOS && !phone.trim()) e.phone = 'Required';
+    else if (phone.trim() && phone.replace(/[^0-9]/g, '').length < 9) e.phone = 'Enter a valid phone number';
     if (!email.trim()) e.email = 'Required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) e.email = 'Invalid email';
     if (!password) e.password = 'Required';
@@ -199,7 +203,7 @@ export default function SignUpPage() {
               </div>
 
               <div>
-                <PhoneInput label="Phone Number *" value={phone} onChange={(v) => setPhone(v)} error={errors.phone} />
+                <PhoneInput label={isNativeIOS ? 'Phone Number' : 'Phone Number *'} value={phone} onChange={(v) => setPhone(v)} error={errors.phone} />
               </div>
 
               <div>
