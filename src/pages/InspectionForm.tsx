@@ -59,6 +59,7 @@ export default function InspectionForm() {
     removeSignature,
     completeInspection,
     saveDraft,
+    syncCurrentInspection,
     updatePropertyItem,
     addPhotoToPropertyItem,
     removePhotoFromPropertyItem,
@@ -75,7 +76,7 @@ export default function InspectionForm() {
   // unlock triggered from this wizard's "Payment" step can never fall through
   // to Stripe on iOS (Guideline 3.1.1).
   const isIOSNative = Capacitor.getPlatform() === 'ios';
-  const [iapState, setIapState] = useState<'idle' | 'checking' | 'purchasing' | 'confirming' | 'error'>('idle');
+  const [iapState, setIapState] = useState<'idle' | 'checking' | 'syncing' | 'purchasing' | 'confirming' | 'error'>('idle');
   const [iapError, setIapError] = useState('');
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -186,8 +187,30 @@ export default function InspectionForm() {
   }, [isIOSNative, currentInspection?.id, paymentCompleted, currentInspection?.payment?.paid, pollBackendForUnlock]);
 
   const handleNativePurchase = useCallback(async () => {
-    setIapState('purchasing');
+    // Part 1 fix — CONFIRMED race condition. Previously this called
+    // purchaseReport() immediately, with no guarantee the current inspection
+    // had been written to the backend. If the RevenueCat webhook
+    // (/api/webhooks/revenuecat) arrived before the inspection row existed in
+    // the database, the webhook correctly found zero matching rows and did
+    // nothing — and the client had no way to know, so it polled forever until
+    // it timed out with "Still confirming your purchase with Apple...".
+    //
+    // Fix: block the purchase on a real, awaited sync of the current
+    // inspection first. syncCurrentInspection() reuses the store's existing
+    // retrySync()/syncInspectionToBackend() path (up to 2 retries). If the
+    // inspection is already synced this is a harmless idempotent PUT — the
+    // backend treats create/update by id as idempotent, so it never breaks or
+    // duplicates an already-synced report.
+    setIapState('syncing');
     setIapError('');
+    const synced = await syncCurrentInspection();
+    if (!synced) {
+      setIapState('error');
+      setIapError('Could not save your inspection before purchase. Please check your connection and try again.');
+      return;
+    }
+
+    setIapState('purchasing');
     const outcome = await purchaseReport();
     if (outcome.status === 'success') {
       // Purchase accepted by Apple/RevenueCat — but the client NEVER unlocks
@@ -202,14 +225,14 @@ export default function InspectionForm() {
       setIapState('error');
       setIapError(outcome.message);
     }
-  }, [pollBackendForUnlock]);
+  }, [pollBackendForUnlock, syncCurrentInspection]);
 
   // Unified "unlock" entry point used by the Payment step below. iOS uses
   // the native RevenueCat purchase flow; Android/web keep the existing
   // Stripe flow completely unchanged.
   const handleUnlockClick = useCallback(() => {
     if (isIOSNative) {
-      if (iapState === 'purchasing' || iapState === 'confirming') return;
+      if (iapState === 'syncing' || iapState === 'purchasing' || iapState === 'confirming') return;
       handleNativePurchase();
     } else {
       setShowPaymentModal(true);
@@ -896,7 +919,7 @@ const PaymentStep = React.memo(function PaymentStep({
   inspection: any; reportPrice: number; paymentCompleted: boolean;
   onOpenPayment: () => void;
   isIOSNative: boolean;
-  iapState: 'idle' | 'checking' | 'purchasing' | 'confirming' | 'error';
+  iapState: 'idle' | 'checking' | 'syncing' | 'purchasing' | 'confirming' | 'error';
   iapError: string;
 }) {
   const paid = inspection.payment?.paid || paymentCompleted;
@@ -961,13 +984,14 @@ const PaymentStep = React.memo(function PaymentStep({
             )}
             <button
               onClick={onOpenPayment}
-              disabled={iapState === 'purchasing' || iapState === 'confirming' || iapState === 'checking'}
+              disabled={iapState === 'syncing' || iapState === 'purchasing' || iapState === 'confirming' || iapState === 'checking'}
               className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold text-sm hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
               </svg>
               {iapState === 'checking' && 'Checking...'}
+              {iapState === 'syncing' && 'Saving report...'}
               {iapState === 'purchasing' && 'Processing...'}
               {iapState === 'confirming' && 'Confirming purchase...'}
               {(iapState === 'idle' || iapState === 'error') && (iapError ? 'Try Again' : `Unlock Report (AED ${reportPrice})`)}

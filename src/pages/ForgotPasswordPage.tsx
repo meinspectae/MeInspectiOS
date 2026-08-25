@@ -94,9 +94,13 @@ export default function ForgotPasswordPage() {
         return;
       }
       setStep('success');
-      // Send password changed notification
+      // Send password changed notification. Use the PUBLIC route: during a
+      // password reset the user is signed OUT, so the auth-gated
+      // /api/notifications/password-changed route would 401 and the email would
+      // never send. The public route verifies the email against the auth-user
+      // table server-side before sending, mirroring the signup welcome email.
       try {
-        await client.api.fetch('/api/notifications/password-changed', {
+        await client.api.fetch('/api/public/notifications/password-changed', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email }),

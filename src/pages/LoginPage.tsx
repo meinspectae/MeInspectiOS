@@ -32,7 +32,7 @@ export default function LoginPage() {
   }, [user, navigate]);
 
   useEffect(() => subscribeToNativeOAuth((result) => {
-    if (!result.ok) {
+    if (result.ok === false) {
       setError(result.error);
       setLoading(false);
     }
