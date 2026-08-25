@@ -26,13 +26,23 @@ function generateId(): string {
 }
 
 // Strip base64 photo data from sync payload to keep it under Cloudflare Workers size limit.
-// Photos are only needed for client-side PDF generation; backend stores metadata only.
-function stripBase64Photos(data: any): any {
+// Photos are only needed for client-side PDF generation; backend stores metadata only,
+// and the actual image is preserved separately via uploadPhotoToCloud()/cloudPath.
+//
+// IMPORTANT: signatures do NOT have an equivalent cloud-upload path — they are only
+// ever stored inline as a `dataUrl` on the inspection record. Since Signature.dataUrl
+// also starts with "data:", the generic key-name match below used to strip it too,
+// silently wiping tenant/landlord/inspector signatures from the backend on every sync
+// (evidentiary data loss on new devices / reinstalls / storage eviction). Signature
+// PNGs are tiny (a few KB) compared to photos, so there's no size-limit reason to
+// strip them — we skip stripping entirely while inside a `signatures` array/object.
+function stripBase64Photos(data: any, parentKey?: string): any {
   if (!data) return data;
   if (Array.isArray(data)) {
-    return data.map(stripBase64Photos);
+    return data.map((item) => stripBase64Photos(item, parentKey));
   }
   if (typeof data === 'object') {
+    if (parentKey === 'signatures') return data;
     const result: any = {};
     for (const [key, value] of Object.entries(data)) {
       if (key === 'url' && typeof value === 'string' && value.startsWith('data:')) {
@@ -41,7 +51,7 @@ function stripBase64Photos(data: any): any {
       } else if (key === 'dataUrl' && typeof value === 'string' && value.startsWith('data:')) {
         result[key] = '';
       } else {
-        result[key] = stripBase64Photos(value);
+        result[key] = stripBase64Photos(value, key);
       }
     }
     return result;
@@ -282,6 +292,14 @@ interface InspectionState {
   // Sync
   syncFromBackend: () => Promise<void>;
   pushToBackend: () => Promise<void>;
+  // Sync ONLY the current in-progress inspection to the backend and resolve
+  // with the real network result (with retries). Unlike pushToBackend() —
+  // which pushes the `inspections` array and only contains entries already
+  // added via saveDraft()/completeInspection() — this targets
+  // `currentInspection` directly and returns true/false so callers can gate
+  // follow-up actions (e.g. starting an iOS in-app purchase) on the
+  // inspection genuinely existing in the backend database first.
+  syncCurrentInspection: () => Promise<boolean>;
   getSyncStatus: () => { lastSyncTime: string | null; status: string };
 
   // Management
@@ -1076,6 +1094,26 @@ export const useInspectionStore = create<InspectionState>()(
       getSyncStatus: () => {
         const { lastSyncTime, syncStatus } = get();
         return { lastSyncTime, status: syncStatus };
+      },
+
+      // Sync ONLY `currentInspection` to the backend and await the real
+      // result (with retries). Reuses the exact same retrySync()/
+      // syncInspectionToBackend() path that saveDraft()/completeInspection()
+      // already use — it does not change their behavior, it just exposes an
+      // awaitable single-inspection variant that returns success/failure.
+      //
+      // Part 1 fix: the iOS RevenueCat purchase flow must guarantee the
+      // inspection row exists in the backend BEFORE starting a purchase.
+      // Otherwise the RevenueCat webhook can arrive before the row is written,
+      // correctly find zero matching rows, do nothing, and the client polls
+      // until it times out. Calling this before purchasing closes that window.
+      syncCurrentInspection: async () => {
+        const { currentInspection } = get();
+        if (!currentInspection) {
+          console.warn('[Store] syncCurrentInspection: no current inspection to sync');
+          return false;
+        }
+        return retrySync(currentInspection);
       },
 
       deleteInspection: (id) => {
