@@ -1578,5 +1578,58 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
     return c.json({ success: result.ok, error: result.error });
   });
 
+  // Password changed notification email (PUBLIC).
+  // During a password reset the user is signed OUT, so the auth-gated
+  // /api/notifications/password-changed route below would 401 and the
+  // confirmation email would never send. This public variant verifies the
+  // email against the managed auth-user table before sending (anti-abuse),
+  // mirroring /api/public/notifications/welcome. Works on web AND native.
+  app.post('/api/public/notifications/password-changed', async (c) => {
+    const { email } = await c.req.json().catch(() => ({}));
+    if (!email) return c.json({ error: 'email is required' }, 400);
+
+    // Only send to a genuinely-registered account; never leak existence.
+    let authUser: any = null;
+    try {
+      const rows = await db
+        .select()
+        .from(tables.esSystemAuthUser)
+        .where(eq(tables.esSystemAuthUser.email, String(email).toLowerCase().trim()));
+      authUser = rows[0] || null;
+    } catch (e) {
+      console.error('[NOTIFICATIONS] password-changed lookup failed:', e);
+    }
+    if (!authUser) {
+      console.warn('[NOTIFICATIONS] password-changed requested for unknown email:', email);
+      return c.json({ success: false, error: 'not_registered' }, 200);
+    }
+
+    const subject = 'MeInspect — Your Password Has Been Changed';
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
+        <div style="text-align: center; margin-bottom: 32px;">
+          <h1 style="font-size: 24px; color: #1e293b; margin: 0;">Password Changed</h1>
+        </div>
+        <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+          <p style="color: #334155; font-size: 15px; line-height: 1.6; margin: 0;">
+            Hi,<br/><br/>
+            Your MeInspect password has been successfully changed. If you did not make this change, please contact our support team immediately.
+          </p>
+        </div>
+        <div style="background: #fef3c7; border: 1px solid #fbbf24; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+          <p style="color: #92400e; font-size: 13px; margin: 0;">
+            <strong>Security tip:</strong> If you didn't change your password, someone else may have accessed your account. Change your password again and enable two-factor authentication if available.
+          </p>
+        </div>
+        <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-top: 32px;">
+          MeInspect — Property Condition Reports for Landlords, Tenants & Inspectors
+        </p>
+      </div>
+    `;
+
+    const result = await sendNotificationEmail(authUser.email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
+  });
+
   return app;
 }
