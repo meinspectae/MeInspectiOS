@@ -292,13 +292,9 @@ interface InspectionState {
   // Sync
   syncFromBackend: () => Promise<void>;
   pushToBackend: () => Promise<void>;
-  // Sync ONLY the current in-progress inspection to the backend and resolve
-  // with the real network result (with retries). Unlike pushToBackend() —
-  // which pushes the `inspections` array and only contains entries already
-  // added via saveDraft()/completeInspection() — this targets
-  // `currentInspection` directly and returns true/false so callers can gate
-  // follow-up actions (e.g. starting an iOS in-app purchase) on the
-  // inspection genuinely existing in the backend database first.
+  // Synchronously guarantees the current inspection row exists in the backend
+  // DB and resolves to `true` only when the sync is confirmed. Used by the iOS
+  // in-app-purchase flow to avoid the webhook-before-row race condition.
   syncCurrentInspection: () => Promise<boolean>;
   getSyncStatus: () => { lastSyncTime: string | null; status: string };
 
@@ -1096,24 +1092,38 @@ export const useInspectionStore = create<InspectionState>()(
         return { lastSyncTime, status: syncStatus };
       },
 
-      // Sync ONLY `currentInspection` to the backend and await the real
-      // result (with retries). Reuses the exact same retrySync()/
-      // syncInspectionToBackend() path that saveDraft()/completeInspection()
-      // already use — it does not change their behavior, it just exposes an
-      // awaitable single-inspection variant that returns success/failure.
-      //
-      // Part 1 fix: the iOS RevenueCat purchase flow must guarantee the
-      // inspection row exists in the backend BEFORE starting a purchase.
-      // Otherwise the RevenueCat webhook can arrive before the row is written,
-      // correctly find zero matching rows, do nothing, and the client polls
-      // until it times out. Calling this before purchasing closes that window.
+      // Guarantees the current inspection exists in the backend DB before a
+      // critical action (iOS in-app purchase). Ensures the record is in the
+      // local `inspections` array, then pushes it to the backend and confirms
+      // success. Returns `true` ONLY when the backend accepted the write, so
+      // the RevenueCat webhook (which resolves the report by inspection.id)
+      // will always find a matching row — closing the webhook-before-row race.
       syncCurrentInspection: async () => {
-        const { currentInspection } = get();
-        if (!currentInspection) {
-          console.warn('[Store] syncCurrentInspection: no current inspection to sync');
+        const { currentInspection, inspections } = get();
+        if (!currentInspection?.id) {
+          console.warn('[Store] syncCurrentInspection: no current inspection');
           return false;
         }
-        return retrySync(currentInspection);
+
+        // Make sure the current inspection is persisted in the local array so
+        // subsequent syncs/reads see it (it may only live in currentInspection).
+        const existingIndex = inspections.findIndex(i => i.id === currentInspection.id);
+        const newInspections = [...inspections];
+        if (existingIndex >= 0) {
+          newInspections[existingIndex] = currentInspection;
+        } else {
+          newInspections.push(currentInspection);
+        }
+        set({ inspections: newInspections, syncStatus: 'syncing' });
+
+        // Push just this inspection with retry and wait for a confirmed result.
+        const ok = await retrySync(currentInspection);
+        set({
+          syncStatus: ok ? 'synced' : 'error',
+          ...(ok ? { lastSyncTime: new Date().toISOString() } : {}),
+        });
+        console.log('[Store] syncCurrentInspection result:', ok, currentInspection.id);
+        return ok;
       },
 
       deleteInspection: (id) => {
