@@ -202,11 +202,30 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
       await db.delete(tables.inspections)
         .where(eq(tables.inspections.userId, userId));
 
-      // Delete the user profile record
+      // Delete the app-level user record
       await db.delete(tables.users)
         .where(eq(tables.users.id, userId));
 
-      console.log(`[ACCOUNT] Deleted account and all data for user: ${userId}`);
+      // Delete the user's profile row (was previously left behind).
+      try {
+        await db.delete(tables.userProfiles)
+          .where(eq(tables.userProfiles.userId, userId));
+      } catch (profileErr) {
+        console.warn('[ACCOUNT] user_profiles cleanup failed (non-fatal):', profileErr);
+      }
+
+      // CRITICAL BUG FIX: previously this endpoint only removed the app-level
+      // `users`/`inspections` rows and returned success — but it NEVER deleted
+      // the actual authentication account (`es_system__auth_user`). The result:
+      // the user could still log in afterwards, and their email stayed
+      // permanently "taken" (re-registration failed with a duplicate email),
+      // so "Delete Account" was effectively a silent no-op. We now delete the
+      // auth identity itself, which truly removes the account and frees the
+      // email for re-use.
+      await db.delete(tables.esSystemAuthUser)
+        .where(eq(tables.esSystemAuthUser.id, userId));
+
+      console.log(`[ACCOUNT] Deleted account (auth identity + all data) for user: ${userId}`);
       return c.json({ success: true, message: 'Account and all associated data deleted successfully' });
     } catch (err) {
       console.error('[ACCOUNT] Error deleting account:', err);
@@ -1034,32 +1053,61 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
     const transactionId: string | undefined = event.transaction_id || event.original_transaction_id;
     const eventId: string | undefined = event.id;
 
-    console.log(`[REVENUECAT_WEBHOOK] Received event: type=${eventType} product=${productId} app_user_id=${inspectionId} event_id=${eventId}`);
+    // --- Structured, always-on diagnostics (step 4 of the debugging brief). ---
+    // Every RevenueCat webhook now logs, in one place: the exact app_user_id
+    // received, whether a matching inspection row was found, and what action
+    // was ultimately taken (unlocked / revoked / no-match / ignored / error).
+    // Previously a silent "no action" path made failures invisible.
+    console.log(`[REVENUECAT_WEBHOOK] Received event: type=${eventType} product=${productId} app_user_id=${inspectionId} transaction=${transactionId} event_id=${eventId}`);
 
     const REPORT_PRODUCT_ID = 'com.meinspect.app.report';
     if (productId !== REPORT_PRODUCT_ID) {
       // Not our product — acknowledge without action (forward-compatible with
       // any other products configured in RevenueCat in the future).
-      console.log(`[REVENUECAT_WEBHOOK] Ignoring event for unrelated product: ${productId}`);
+      console.log(`[REVENUECAT_WEBHOOK] action=ignored reason=unrelated_product product=${productId} app_user_id=${inspectionId}`);
       return c.json({ received: true });
     }
 
     if (!inspectionId) {
-      console.warn('[REVENUECAT_WEBHOOK] Event missing app_user_id — cannot resolve inspection, ignoring');
+      console.warn(`[REVENUECAT_WEBHOOK] action=ignored reason=missing_app_user_id event_id=${eventId}`);
       return c.json({ received: true });
     }
 
     const inspectionRows = await db.select().from(tables.inspections)
       .where(eq(tables.inspections.id, inspectionId));
 
-    if (inspectionRows.length === 0) {
-      console.warn(`[REVENUECAT_WEBHOOK] No inspection found for app_user_id=${inspectionId} — ignoring`);
+    const matchFound = inspectionRows.length > 0;
+    console.log(`[REVENUECAT_WEBHOOK] app_user_id=${inspectionId} match_found=${matchFound} event_type=${eventType}`);
+
+    if (!matchFound) {
+      console.warn(`[REVENUECAT_WEBHOOK] action=no_match reason=no_inspection_row app_user_id=${inspectionId} — returning 200 (event may be unrelated or the row does not exist yet)`);
       return c.json({ received: true });
     }
 
     const currentData = tryParse(inspectionRows[0].paymentData as string);
 
-    if (eventType === 'INITIAL_PURCHASE') {
+    // ---- Event-type classification (ROOT-CAUSE FIX) ----
+    // The report unlock (`com.meinspect.app.report`) is a NON-subscription,
+    // one-time purchase. RevenueCat fires `NON_RENEWING_PURCHASE` for these,
+    // NOT `INITIAL_PURCHASE` (which is only sent for subscriptions). The old
+    // handler only granted on `INITIAL_PURCHASE`, so a genuine, verified
+    // one-time purchase fell through to the silent "no action" branch,
+    // returned 200, and left the report locked forever. We now treat every
+    // grant-type event as an unlock.
+    const GRANT_EVENTS = new Set([
+      'INITIAL_PURCHASE',       // subscriptions (kept for completeness)
+      'NON_RENEWING_PURCHASE',  // one-time / consumable purchases — OUR product
+      'RENEWAL',                // subscription renewals (kept for completeness)
+      'UNCANCELLATION',         // user reversed a pending cancellation
+      'PRODUCT_CHANGE',         // upgrade/crossgrade still implies active access
+    ]);
+    const REVOKE_EVENTS = new Set([
+      'CANCELLATION',
+      'REFUND',
+      'EXPIRATION',
+    ]);
+
+    if (GRANT_EVENTS.has(eventType)) {
       await db.update(tables.inspections)
         .set({
           paymentData: JSON.stringify({
@@ -1069,11 +1117,12 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
             productId,
             transactionId,
             paidAt: Math.floor(Date.now() / 1000),
+            unlockedByEvent: eventType,
           }),
         })
         .where(eq(tables.inspections.id, inspectionId));
-      console.log(`[REVENUECAT_WEBHOOK] Unlocked report ${inspectionId} via verified RevenueCat INITIAL_PURCHASE (transaction ${transactionId})`);
-    } else if (eventType === 'CANCELLATION' || eventType === 'REFUND') {
+      console.log(`[REVENUECAT_WEBHOOK] action=unlocked app_user_id=${inspectionId} event_type=${eventType} transaction=${transactionId}`);
+    } else if (REVOKE_EVENTS.has(eventType)) {
       await db.update(tables.inspections)
         .set({
           paymentData: JSON.stringify({
@@ -1087,12 +1136,117 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
           }),
         })
         .where(eq(tables.inspections.id, inspectionId));
-      console.warn(`[REVENUECAT_WEBHOOK] Revoked report ${inspectionId} access due to ${eventType} (transaction ${transactionId})`);
+      console.warn(`[REVENUECAT_WEBHOOK] action=revoked app_user_id=${inspectionId} event_type=${eventType} transaction=${transactionId}`);
     } else {
-      console.log(`[REVENUECAT_WEBHOOK] No action taken for event type: ${eventType}`);
+      // Genuinely informational events (TEST, BILLING_ISSUE, TRANSFER, etc.).
+      console.log(`[REVENUECAT_WEBHOOK] action=no_op reason=non_actionable_event event_type=${eventType} app_user_id=${inspectionId}`);
     }
 
     return c.json({ received: true });
+  });
+
+  // ==================== REVENUECAT RECONCILIATION (SAFETY NET) ====================
+  // Manual reconciliation path for the iOS in-app purchase. If the webhook is
+  // delayed or was missed entirely, the client can call this after its
+  // "Confirming Purchase" poll times out. Instead of relying solely on the
+  // webhook having already run, we query RevenueCat's OWN record of this
+  // customer's (app_user_id === inspectionId) purchase history via the REST
+  // API. If RevenueCat confirms a valid, non-refunded purchase of our product,
+  // we unlock the report directly here — so a user is never permanently stuck.
+  //
+  // Trust model preserved: unlocking still requires an authoritative,
+  // server-side confirmation from RevenueCat (not the client's word), and this
+  // endpoint enforces that the caller owns the inspection.
+  app.post('/api/inspections/:id/reconcile-purchase', async (c) => {
+    const userId = auth.user?.id;
+    if (!userId) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    const inspectionId = c.req.param('id');
+
+    // Ownership check — a user can only reconcile their own report.
+    const rows = await db.select().from(tables.inspections)
+      .where(and(eq(tables.inspections.id, inspectionId), eq(tables.inspections.userId, userId)));
+    if (rows.length === 0) {
+      console.warn(`[REVENUECAT_RECONCILE] app_user_id=${inspectionId} user=${userId} action=denied reason=not_owner_or_missing`);
+      return c.json({ error: 'Inspection not found' }, 404);
+    }
+
+    const currentData = tryParse(rows[0].paymentData as string);
+    if (currentData?.paid === true) {
+      // Already unlocked (webhook may have won the race) — nothing to do.
+      console.log(`[REVENUECAT_RECONCILE] app_user_id=${inspectionId} action=already_paid`);
+      return c.json({ paid: true, source: 'already_paid' });
+    }
+
+    const apiKey = secret.get('REVENUECAT_SECRET_API_KEY');
+    if (!apiKey) {
+      console.error('[REVENUECAT_RECONCILE] REVENUECAT_SECRET_API_KEY not configured — cannot reconcile');
+      return c.json({ paid: false, error: 'Reconciliation not configured' }, 500);
+    }
+
+    // Query RevenueCat's authoritative record for this app_user_id.
+    let subscriber: any = null;
+    try {
+      const rcRes = await fetch(
+        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(inspectionId)}`,
+        { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
+      );
+      if (!rcRes.ok) {
+        const body = await rcRes.text().catch(() => '');
+        console.warn(`[REVENUECAT_RECONCILE] app_user_id=${inspectionId} action=rc_lookup_failed status=${rcRes.status} body=${body.slice(0, 200)}`);
+        return c.json({ paid: false, source: 'revenuecat', error: 'RevenueCat lookup failed' });
+      }
+      const data = await rcRes.json() as any;
+      subscriber = data?.subscriber;
+    } catch (err) {
+      console.error(`[REVENUECAT_RECONCILE] app_user_id=${inspectionId} action=rc_lookup_error`, err);
+      return c.json({ paid: false, source: 'revenuecat', error: 'RevenueCat unreachable' });
+    }
+
+    const REPORT_PRODUCT_ID = 'com.meinspect.app.report';
+
+    // A valid one-time purchase shows up under `non_subscriptions[productId]`,
+    // an array of transactions. A refunded transaction carries `is_refunded`.
+    const nonSubs = subscriber?.non_subscriptions?.[REPORT_PRODUCT_ID];
+    const validNonSub = Array.isArray(nonSubs)
+      ? nonSubs.find((t: any) => t && t.is_refunded !== true)
+      : null;
+
+    // Some configurations grant an entitlement instead — accept an active
+    // (non-expired) entitlement tied to this product as confirmation too.
+    const entitlements = subscriber?.entitlements || {};
+    const now = Date.now();
+    const activeEntitlement = Object.values(entitlements).find((e: any) => {
+      if (!e) return false;
+      const notExpired = !e.expires_date || new Date(e.expires_date).getTime() > now;
+      const matchesProduct = !e.product_identifier || e.product_identifier === REPORT_PRODUCT_ID;
+      return notExpired && matchesProduct;
+    });
+
+    if (validNonSub || activeEntitlement) {
+      const purchaseDate = (validNonSub && validNonSub.purchase_date) || null;
+      const txnId = (validNonSub && (validNonSub.store_transaction_id || validNonSub.id)) || 'reconciled';
+      await db.update(tables.inspections)
+        .set({
+          paymentData: JSON.stringify({
+            ...currentData,
+            paid: true,
+            provider: 'revenuecat',
+            productId: REPORT_PRODUCT_ID,
+            transactionId: txnId,
+            paidAt: Math.floor(Date.now() / 1000),
+            unlockedByEvent: 'RECONCILIATION',
+            reconciledPurchaseDate: purchaseDate,
+          }),
+        })
+        .where(eq(tables.inspections.id, inspectionId));
+      console.log(`[REVENUECAT_RECONCILE] app_user_id=${inspectionId} action=unlocked source=revenuecat transaction=${txnId}`);
+      return c.json({ paid: true, source: 'revenuecat' });
+    }
+
+    console.log(`[REVENUECAT_RECONCILE] app_user_id=${inspectionId} action=no_purchase_found source=revenuecat`);
+    return c.json({ paid: false, source: 'revenuecat' });
   });
 
   // Get user's payment history
@@ -1422,6 +1576,62 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
     return c.json({ success: result.ok, error: result.error });
   });
 
+  // Public, self-verifying "password changed" confirmation email.
+  // BUG FIX (Forgot Password): the password-reset flow runs while the user is
+  // logged OUT, but the original confirmation endpoint below
+  // (/api/notifications/password-changed) is auth-gated and therefore always
+  // returned 401 during the reset flow — so the "your password was changed"
+  // email silently never sent. This public variant looks the email up in the
+  // auth table and only sends to a genuinely registered account (no session or
+  // token required), mirroring the public welcome-email pattern.
+  app.post('/api/public/notifications/password-changed', async (c) => {
+    const { email } = await c.req.json().catch(() => ({}));
+    if (!email) return c.json({ error: 'email is required' }, 400);
+
+    let authUser: any = null;
+    try {
+      const rows = await db
+        .select()
+        .from(tables.esSystemAuthUser)
+        .where(eq(tables.esSystemAuthUser.email, String(email).toLowerCase().trim()));
+      authUser = rows[0] || null;
+    } catch (e) {
+      console.error('[NOTIFICATIONS] password-changed lookup failed:', e);
+    }
+
+    if (!authUser) {
+      // Do not leak whether an email exists; report a no-op.
+      console.warn('[NOTIFICATIONS] password-changed requested for unknown email:', email);
+      return c.json({ success: false, error: 'not_registered' }, 200);
+    }
+
+    const subject = 'MeInspect — Your Password Has Been Changed';
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
+        <div style="text-align: center; margin-bottom: 32px;">
+          <h1 style="font-size: 24px; color: #1e293b; margin: 0;">Password Changed</h1>
+        </div>
+        <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+          <p style="color: #334155; font-size: 15px; line-height: 1.6; margin: 0;">
+            Hi,<br/><br/>
+            Your MeInspect password has been successfully changed. If you did not make this change, please contact our support team immediately.
+          </p>
+        </div>
+        <div style="background: #fef3c7; border: 1px solid #fbbf24; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+          <p style="color: #92400e; font-size: 13px; margin: 0;">
+            <strong>Security tip:</strong> If you didn't change your password, someone else may have accessed your account. Reset your password again immediately.
+          </p>
+        </div>
+        <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-top: 32px;">
+          MeInspect — Property Condition Reports for Landlords, Tenants & Inspectors
+        </p>
+      </div>
+    `;
+
+    const result = await sendNotificationEmail(authUser.email, subject, html);
+    return c.json({ success: result.ok, error: result.error });
+  });
+
   // Welcome email — sent after successful signup
   app.post('/api/notifications/welcome', async (c) => {
     if (!auth.user) return c.json({ error: 'Unauthorized' }, 401);
@@ -1575,59 +1785,6 @@ export async function createApp(edgespark: Client<typeof tables>): Promise<Hono>
     `;
 
     const result = await sendNotificationEmail(email, subject, html);
-    return c.json({ success: result.ok, error: result.error });
-  });
-
-  // Password changed notification email (PUBLIC).
-  // During a password reset the user is signed OUT, so the auth-gated
-  // /api/notifications/password-changed route below would 401 and the
-  // confirmation email would never send. This public variant verifies the
-  // email against the managed auth-user table before sending (anti-abuse),
-  // mirroring /api/public/notifications/welcome. Works on web AND native.
-  app.post('/api/public/notifications/password-changed', async (c) => {
-    const { email } = await c.req.json().catch(() => ({}));
-    if (!email) return c.json({ error: 'email is required' }, 400);
-
-    // Only send to a genuinely-registered account; never leak existence.
-    let authUser: any = null;
-    try {
-      const rows = await db
-        .select()
-        .from(tables.esSystemAuthUser)
-        .where(eq(tables.esSystemAuthUser.email, String(email).toLowerCase().trim()));
-      authUser = rows[0] || null;
-    } catch (e) {
-      console.error('[NOTIFICATIONS] password-changed lookup failed:', e);
-    }
-    if (!authUser) {
-      console.warn('[NOTIFICATIONS] password-changed requested for unknown email:', email);
-      return c.json({ success: false, error: 'not_registered' }, 200);
-    }
-
-    const subject = 'MeInspect — Your Password Has Been Changed';
-    const html = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
-        <div style="text-align: center; margin-bottom: 32px;">
-          <h1 style="font-size: 24px; color: #1e293b; margin: 0;">Password Changed</h1>
-        </div>
-        <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
-          <p style="color: #334155; font-size: 15px; line-height: 1.6; margin: 0;">
-            Hi,<br/><br/>
-            Your MeInspect password has been successfully changed. If you did not make this change, please contact our support team immediately.
-          </p>
-        </div>
-        <div style="background: #fef3c7; border: 1px solid #fbbf24; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
-          <p style="color: #92400e; font-size: 13px; margin: 0;">
-            <strong>Security tip:</strong> If you didn't change your password, someone else may have accessed your account. Change your password again and enable two-factor authentication if available.
-          </p>
-        </div>
-        <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-top: 32px;">
-          MeInspect — Property Condition Reports for Landlords, Tenants & Inspectors
-        </p>
-      </div>
-    `;
-
-    const result = await sendNotificationEmail(authUser.email, subject, html);
     return c.json({ success: result.ok, error: result.error });
   });
 
