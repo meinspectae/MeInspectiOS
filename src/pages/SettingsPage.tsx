@@ -410,36 +410,9 @@ export default function SettingsPage() {
                   setDeletingAccount(true);
                   setDeleteError('');
                   try {
-                    // 1) Purge app data (inspections + profile row) while the
-                    //    session is still valid. Must run BEFORE deleteUser()
-                    //    below, because deleting the auth identity invalidates
-                    //    the session and this authenticated call would then 401.
                     const res = await client.api.fetch('/api/user/account', { method: 'DELETE' });
-                    if (!res.ok) throw new Error('Failed to delete account data');
-
-                    // 2) Delete the actual auth identity via better-auth.
-                    //    THIS is the real bug fix: previously we only deleted the
-                    //    app's own data and signed out, but the login credentials
-                    //    survived in the managed auth system — so the user could
-                    //    immediately sign back in and the account was never truly
-                    //    deleted. The backend `auth` object exposes no delete
-                    //    capability (only `user`/`isAuthenticated()`), so the
-                    //    identity MUST be removed client-side through better-auth's
-                    //    deleteUser() (hits POST /delete-user).
-                    const del = await client.auth.deleteUser();
-                    if (del?.error) {
-                      const code = del.error.code || del.error.status;
-                      if (code === 'SESSION_EXPIRED') {
-                        setDeleteError('For your security, please sign out, sign back in, then delete your account again.');
-                      } else {
-                        setDeleteError(del.error.message || 'Failed to delete account. Please try again.');
-                      }
-                      setDeletingAccount(false);
-                      return;
-                    }
-
-                    // 3) Auth identity removed — clear local session/state and leave.
-                    await signOut().catch(() => {});
+                    if (!res.ok) throw new Error('Failed to delete account');
+                    await signOut();
                     reset();
                     navigate('/login');
                   } catch {

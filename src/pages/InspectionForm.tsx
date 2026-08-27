@@ -76,7 +76,7 @@ export default function InspectionForm() {
   // unlock triggered from this wizard's "Payment" step can never fall through
   // to Stripe on iOS (Guideline 3.1.1).
   const isIOSNative = Capacitor.getPlatform() === 'ios';
-  const [iapState, setIapState] = useState<'idle' | 'checking' | 'syncing' | 'purchasing' | 'confirming' | 'error'>('idle');
+  const [iapState, setIapState] = useState<'idle' | 'checking' | 'purchasing' | 'confirming' | 'error'>('idle');
   const [iapError, setIapError] = useState('');
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -112,6 +112,45 @@ export default function InspectionForm() {
   const pollBackendForUnlock = useCallback((maxAttempts = 20, intervalMs = 3000) => {
     if (!currentInspection?.id) return;
     let attempts = 0;
+
+    // Helper that unlocks the report locally once the backend confirms payment.
+    const markPaid = (paymentStatus: any) => {
+      const { recordPayment } = useInspectionStore.getState();
+      recordPayment(currentInspection.id, {
+        paid: true,
+        amount: paymentStatus.amount || REPORT_PRICE,
+        currency: paymentStatus.currency || 'AED',
+        method: 'apple_pay',
+        paidAt: paymentStatus.paidAt,
+      });
+      setPaymentCompleted(true);
+      setIapState('idle');
+      setIapError('');
+    };
+
+    // SAFETY NET: if the webhook never flips paymentData.paid (delayed/missed
+    // webhook, or an event type it didn't handle), ask the backend to reconcile
+    // directly against RevenueCat's own record of this purchase. If RevenueCat
+    // confirms a valid purchase, the report unlocks without depending on the
+    // webhook having run at all — so the user is never permanently stuck.
+    const reconcileWithRevenueCat = async () => {
+      try {
+        const res = await client.api.fetch(`/api/inspections/${currentInspection.id}/reconcile-purchase`, {
+          method: 'POST',
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data?.paid === true) {
+            markPaid({ amount: REPORT_PRICE, currency: 'AED', paidAt: new Date().toISOString() });
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn('[InspectionForm] RevenueCat reconciliation failed:', e);
+      }
+      return false;
+    };
+
     const tick = async () => {
       attempts += 1;
       try {
@@ -125,17 +164,7 @@ export default function InspectionForm() {
             paymentStatus = data.payment;
           }
           if (paymentStatus?.paid === true) {
-            const { recordPayment } = useInspectionStore.getState();
-            recordPayment(currentInspection.id, {
-              paid: true,
-              amount: paymentStatus.amount || REPORT_PRICE,
-              currency: paymentStatus.currency || 'AED',
-              method: 'apple_pay',
-              paidAt: paymentStatus.paidAt,
-            });
-            setPaymentCompleted(true);
-            setIapState('idle');
-            setIapError('');
+            markPaid(paymentStatus);
             return;
           }
         }
@@ -145,8 +174,13 @@ export default function InspectionForm() {
       if (attempts < maxAttempts) {
         pollTimerRef.current = setTimeout(tick, intervalMs);
       } else {
-        setIapState('error');
-        setIapError('Still confirming your purchase with Apple. This can take a moment — please try again shortly.');
+        // Poll timed out — try the direct RevenueCat reconciliation before
+        // giving up and showing an error.
+        const reconciled = await reconcileWithRevenueCat();
+        if (!reconciled) {
+          setIapState('error');
+          setIapError('Still confirming your purchase with Apple. This can take a moment — please try again shortly.');
+        }
       }
     };
     tick();
@@ -187,22 +221,15 @@ export default function InspectionForm() {
   }, [isIOSNative, currentInspection?.id, paymentCompleted, currentInspection?.payment?.paid, pollBackendForUnlock]);
 
   const handleNativePurchase = useCallback(async () => {
-    // Part 1 fix — CONFIRMED race condition. Previously this called
-    // purchaseReport() immediately, with no guarantee the current inspection
-    // had been written to the backend. If the RevenueCat webhook
-    // (/api/webhooks/revenuecat) arrived before the inspection row existed in
-    // the database, the webhook correctly found zero matching rows and did
-    // nothing — and the client had no way to know, so it polled forever until
-    // it timed out with "Still confirming your purchase with Apple...".
-    //
-    // Fix: block the purchase on a real, awaited sync of the current
-    // inspection first. syncCurrentInspection() reuses the store's existing
-    // retrySync()/syncInspectionToBackend() path (up to 2 retries). If the
-    // inspection is already synced this is a harmless idempotent PUT — the
-    // backend treats create/update by id as idempotent, so it never breaks or
-    // duplicates an already-synced report.
-    setIapState('syncing');
+    // RACE-CONDITION FIX (iOS only): the RevenueCat webhook resolves the report
+    // to unlock purely by app_user_id === inspectionId, and returns 200 (doing
+    // nothing) when no matching inspection row exists. If we start the purchase
+    // before the inspection is saved to the backend, the webhook can arrive
+    // first, find zero rows, and silently no-op — leaving the client polling
+    // forever until it times out. So we MUST guarantee the row exists first.
+    setIapState('purchasing');
     setIapError('');
+
     const synced = await syncCurrentInspection();
     if (!synced) {
       setIapState('error');
@@ -210,7 +237,6 @@ export default function InspectionForm() {
       return;
     }
 
-    setIapState('purchasing');
     const outcome = await purchaseReport();
     if (outcome.status === 'success') {
       // Purchase accepted by Apple/RevenueCat — but the client NEVER unlocks
@@ -232,7 +258,7 @@ export default function InspectionForm() {
   // Stripe flow completely unchanged.
   const handleUnlockClick = useCallback(() => {
     if (isIOSNative) {
-      if (iapState === 'syncing' || iapState === 'purchasing' || iapState === 'confirming') return;
+      if (iapState === 'purchasing' || iapState === 'confirming') return;
       handleNativePurchase();
     } else {
       setShowPaymentModal(true);
@@ -919,7 +945,7 @@ const PaymentStep = React.memo(function PaymentStep({
   inspection: any; reportPrice: number; paymentCompleted: boolean;
   onOpenPayment: () => void;
   isIOSNative: boolean;
-  iapState: 'idle' | 'checking' | 'syncing' | 'purchasing' | 'confirming' | 'error';
+  iapState: 'idle' | 'checking' | 'purchasing' | 'confirming' | 'error';
   iapError: string;
 }) {
   const paid = inspection.payment?.paid || paymentCompleted;
@@ -984,14 +1010,13 @@ const PaymentStep = React.memo(function PaymentStep({
             )}
             <button
               onClick={onOpenPayment}
-              disabled={iapState === 'syncing' || iapState === 'purchasing' || iapState === 'confirming' || iapState === 'checking'}
+              disabled={iapState === 'purchasing' || iapState === 'confirming' || iapState === 'checking'}
               className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold text-sm hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
               </svg>
               {iapState === 'checking' && 'Checking...'}
-              {iapState === 'syncing' && 'Saving report...'}
               {iapState === 'purchasing' && 'Processing...'}
               {iapState === 'confirming' && 'Confirming purchase...'}
               {(iapState === 'idle' || iapState === 'error') && (iapError ? 'Try Again' : `Unlock Report (AED ${reportPrice})`)}

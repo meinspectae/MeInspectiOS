@@ -214,9 +214,40 @@ export default function ReportPage() {
       if (attempts < maxAttempts) {
         pollTimerRef.current = setTimeout(tick, intervalMs);
       } else {
-        // Never fail silently — give the user a clear, retry-able state.
-        setIapState('error');
-        setIapError('Still confirming your purchase with Apple. This can take a moment — please try again shortly.');
+        // SAFETY NET: the webhook never confirmed within the poll window. Ask
+        // the backend to reconcile directly against RevenueCat's own record of
+        // this purchase before showing an error — so the user is never
+        // permanently stuck if the webhook path had an issue.
+        let reconciled = false;
+        try {
+          const rec = await client.api.fetch(`/api/inspections/${inspection.id}/reconcile-purchase`, {
+            method: 'POST',
+          });
+          if (rec.ok) {
+            const recData = await rec.json().catch(() => ({}));
+            if (recData?.paid === true) {
+              setIsPaid(true);
+              setIapState('idle');
+              setIapError('');
+              const { recordPayment } = useInspectionStore.getState();
+              recordPayment(inspection.id, {
+                paid: true,
+                amount: 0,
+                currency: 'AED',
+                method: 'apple_pay',
+                paidAt: new Date().toISOString(),
+              });
+              reconciled = true;
+            }
+          }
+        } catch (e) {
+          console.warn('[ReportPage] RevenueCat reconciliation failed:', e);
+        }
+        if (!reconciled) {
+          // Never fail silently — give the user a clear, retry-able state.
+          setIapState('error');
+          setIapError('Still confirming your purchase with Apple. This can take a moment — please try again shortly.');
+        }
       }
     };
     tick();
